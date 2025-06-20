@@ -1,0 +1,9 @@
+ipykernel
+lipstick
+matplotlib
+numpy
+pyyaml
+seaborn
+scikit-learn
+torch
+wandb

@@ -7,7 +7,15 @@ import numpy as np
 import torch
 import yaml
 
-from mymodels.modules import SequenceCrossEntropyLoss
+from motorlab import data, modules
+
+
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+elif torch.backends.mps.is_available():
+    device = torch.device("mps")
+else:
+    device = torch.device("cpu")
 
 
 def filter_sitting(tiles, intervals, low=3, high=11):
@@ -120,21 +128,22 @@ def extract_trials_intervals(TRIALS_DIR, fps=20):
     return intervals
 
 
-def extract_intervals(config, tiles_data):
+def extract_intervals(config):
     test_intervals = dict()
     train_intervals = dict()
     valid_intervals = dict()
     percent = 20
 
     for session in config["sessions"]:
-        trials_dir = Path(f"{config['DATA_DIR']}/{session}/trials")
-        intervals = extract_trials_intervals(trials_dir)
+        TRIALS_DIR = Path(f"{config['DATA_DIR']}/{session}/trials")
+        intervals = extract_trials_intervals(TRIALS_DIR)
 
         if config["homing"]:
-            intervals += extract_homing_intervals(trials_dir)
+            intervals += extract_homing_intervals(TRIALS_DIR)
 
         if config.get("filter", "") == "sitting":
-            intervals = filter_sitting(tiles_data[session], intervals)
+            tiles = data.load_tiles(config["DATA_DIR"], session, config["experiment"])
+            intervals = filter_sitting(tiles, intervals)
 
         shuffled_intervals = random.sample(intervals, k=len(intervals))
         n_intervals = len(shuffled_intervals)
@@ -174,22 +183,13 @@ def list_modalities(modalities):
         raise ValueError(f"unknown modalities: {modalities}.")
 
 
-def position_prediction_loss_fn(tiles, intervals):
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    elif torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
-
+def compute_weights(tiles, intervals):
     # i'm using the poses and the valid intervals instead of the tiles itself because the distribution will probably change considerably when we compare the full session and only the valid time points.
     tile_distr = compute_tile_distribution(tiles, intervals)
     weights = torch.tensor(
         np.where(tile_distr > 0.0, 1.0 - tile_distr, 0.0), dtype=torch.float32
     ).to(device)
-    loss_fn = SequenceCrossEntropyLoss(weights)
-
-    return loss_fn
+    return weights
 
 
 def fix_seed(seed):

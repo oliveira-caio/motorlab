@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "motorlab"
+description = "tooling for my phd experiments."
+version = "0.1.0"
+readme = "README.md"
+license = "MIT"
+authors = [
+    {name = "Caio O. da Silva", email = "oliveiracaio1@yandex.com"},
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+dynamic = ["dependencies"]
+
+[tool.setuptools.packages.find]
+include = ["motorlab"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}

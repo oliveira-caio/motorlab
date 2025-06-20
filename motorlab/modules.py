@@ -1,5 +1,7 @@
 import torch
 
+from . import utils
+
 
 class SoftplusReadout(torch.nn.Module):
     def __init__(self, config, n_directions):
@@ -122,15 +124,10 @@ class GRUModel(torch.nn.Module):
         return y
 
 
-class SequenceCrossEntropyLoss(torch.nn.Module):
-    """
-    Applies CrossEntropyLoss to (batch, seq, n_classes) predictions and (batch, seq) targets.
-    Optionally supports class weights.
-    """
-
-    def __init__(self, weights=None):
+class SequentialCrossEntropyLoss(torch.nn.Module):
+    def __init__(self):
         super().__init__()
-        self.loss_fn = torch.nn.CrossEntropyLoss(weight=weights)
+        self.loss_fn = torch.nn.CrossEntropyLoss()
 
     def forward(self, pred, target):
         # pred: (batch, seq, n_classes), dtype: float32
@@ -139,3 +136,12 @@ class SequenceCrossEntropyLoss(torch.nn.Module):
         pred_flat = pred.view(-1, n_classes)
         target_flat = target.view(-1).long()
         return self.loss_fn(pred_flat, target_flat)
+
+
+def losses_map(loss_fn):
+    if loss_fn == "poisson":
+        return torch.nn.PoissonNLLLoss(log_input=False, full=True)
+    elif loss_fn == "crossentropy":
+        return SequentialCrossEntropyLoss()
+    else:
+        raise ValueError(f"loss function {loss_fn} not implemented.")
