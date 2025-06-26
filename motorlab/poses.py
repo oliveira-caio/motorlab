@@ -2,8 +2,12 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
 
 from lipstick import GifMaker, update_fig
+
+from . import data
+from . import utils
 
 
 skeleton = [
@@ -173,7 +177,9 @@ def compute_speed(poses, experiment, speed_repr):
         speed[1:] = np.diff(com, axis=0)
     elif speed_repr == "kps_mag":
         speed = np.zeros((duration, 1))
-        speed[1:] = np.linalg.norm(np.diff(poses, axis=0), axis=1, keepdims=True)
+        speed[1:] = np.linalg.norm(
+            np.diff(poses, axis=0), axis=1, keepdims=True
+        )
     elif speed_repr == "com_mag":
         poses = poses.reshape(duration, n_3d_keypoints // 3, 3)
         com = poses[:, com_keypoints[experiment]].mean(axis=1)
@@ -222,7 +228,9 @@ def change_repr(poses, experiment, body_repr):
         y_axis = y_axis - inner_product * x_axis
         z_axis = np.cross(x_axis, y_axis)
         # change of basis matrices: from room coords to head-centered coords.
-        cob_matrices = np.linalg.pinv(np.stack((x_axis, y_axis, z_axis), axis=2))
+        cob_matrices = np.linalg.pinv(
+            np.stack((x_axis, y_axis, z_axis), axis=2)
+        )
         new_poses -= np.tile(middle_head, (1, n_3d_keypoints // 3, 1))
         new_poses = np.einsum("nij,nkj->nki", cob_matrices, new_poses)
         new_poses = np.reshape(new_poses, (duration, n_3d_keypoints))
@@ -293,12 +301,6 @@ def plot(
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.set_zlabel("z")
-        ax.set_xlim(-0.5, 0.5)
-        ax.set_ylim(-0.5, 0.5)
-        ax.set_zlim(-0.5, 0.5)
-        ax.set_xticks(np.arange(-0.5, 0.55, 0.25))
-        ax.set_yticks(np.arange(-0.5, 0.55, 0.25))
-        ax.set_zticks(np.arange(-0.5, 0.55, 0.25))
         ax.view_init(elev=15, azim=70)
         ax.set_box_aspect([1, 1, 1])
         ax.grid(False)
@@ -323,3 +325,43 @@ def plot(
 
     for fig, ax in figs:
         update_fig(fig, ax)
+
+
+def plot_com(DATA_DIR, sessions=None, ncols=3, homing=False):
+    DATA_DIR = Path(DATA_DIR)
+    if sessions is None:
+        sessions = [DATA_DIR.name]
+        DATA_DIR = DATA_DIR.parent
+
+    n_sessions = len(sessions)
+    ncols = min(ncols, n_sessions)
+    nrows = (n_sessions + ncols - 1) // ncols
+
+    fig, axs = plt.subplots(
+        nrows=nrows,
+        ncols=ncols,
+        figsize=(ncols * 3.5, nrows * 3.5),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
+    )
+    axs = axs.flat
+
+    for i, s in enumerate(sessions):
+        POSES_DIR = DATA_DIR / s / "poses"
+        poses = data.load_from_memmap(POSES_DIR)
+        poses = poses.reshape(-1, 21, 3)
+        com = poses[:, com_keypoints["gbyk"], :2].mean(axis=1)
+
+        TRIALS_DIR = DATA_DIR / s / "trials"
+        if homing:
+            intervals = utils.extract_homing_intervals(TRIALS_DIR)
+        else:
+            intervals = utils.extract_trials_intervals(TRIALS_DIR)
+
+        for start, end in intervals:
+            axs[i].plot(com[start:end, 0], com[start:end, 1], color="b")
+            axs[i].set_title(s)
+
+    fig.tight_layout()
+    plt.show()

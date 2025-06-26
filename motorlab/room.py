@@ -37,11 +37,13 @@ def plot(save_path=None):
     tile_width = x_size / x_divisions
     tile_height = y_size / y_divisions
 
-    fig, ax = plt.subplots(figsize=(6, 10))
+    fig, ax = plt.subplots(figsize=(4, 5))
 
     # Draw the outer rectangle (the room)
     ax.add_patch(
-        plt.Rectangle((0, 0), x_size, y_size, edgecolor="black", facecolor="none", lw=4)
+        plt.Rectangle(
+            (0, 0), x_size, y_size, edgecolor="black", facecolor="none", lw=4
+        )
     )
 
     tile_number = 0
@@ -66,7 +68,14 @@ def plot(save_path=None):
             xc = x0 + tile_width / 2
             yc = y0 + tile_height / 2
 
-            ax.text(xc, yc, f"Tile {(row, col)}", ha="center", va="center", fontsize=12)
+            ax.text(
+                xc,
+                yc,
+                f"Tile {(col, row)}",
+                ha="center",
+                va="center",
+                fontsize=10,
+            )
             tile_number += 1
 
     # Set ticks at division edges
@@ -82,4 +91,4 @@ def plot(save_path=None):
     plt.show()
 
     if save_path:
-        fig.savefig(save_path, bbox_inches="tight")
+        fig.savefig(save_path, bbox_inches="tight", dpi=300)

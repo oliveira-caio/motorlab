@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import yaml
 
-from motorlab import data, modules
+from motorlab import data
 
 
 if torch.cuda.is_available():
@@ -60,7 +60,9 @@ def balance_intervals(tiles, intervals, middle_range=(5, 9), alpha=1.2):
             segment = tiles[start:end]
             counts = Counter(segment)
 
-            mid_counts = [count for val, count in counts.items() if val in mid_values]
+            mid_counts = [
+                count for val, count in counts.items() if val in mid_values
+            ]
             median_count = (
                 np.median(mid_counts)
                 if mid_counts
@@ -106,7 +108,9 @@ def extract_homing_intervals(TRIALS_DIR, fps=20):
 
     # the threshold is needed so we know the monkey returned to the starting position "right after" the trial. i plotted the histogram of homing duration and 60 seconds looks like a good threshold.
     intervals = [
-        [e, s] for e, s in zip(end_trials, start_trials[1:]) if s - e <= threshold
+        [e, s]
+        for e, s in zip(end_trials, start_trials[1:])
+        if s - e <= threshold
     ]
 
     return intervals
@@ -142,7 +146,9 @@ def extract_intervals(config):
             intervals += extract_homing_intervals(TRIALS_DIR)
 
         if config.get("filter", "") == "sitting":
-            tiles = data.load_tiles(config["DATA_DIR"], session, config["experiment"])
+            tiles = data.load_tiles(
+                config["DATA_DIR"], session, config["experiment"]
+            )
             intervals = filter_sitting(tiles, intervals)
 
         shuffled_intervals = random.sample(intervals, k=len(intervals))
@@ -177,8 +183,8 @@ def list_modalities(modalities):
         return ["poses", "speed", "acceleration"]
     elif modalities == "poses_spikes":
         return ["poses", "spike_count"]
-    elif modalities == "tiles":
-        return ["tiles"]
+    elif modalities == "position":
+        return ["position"]
     else:
         raise ValueError(f"unknown modalities: {modalities}.")
 
@@ -197,6 +203,57 @@ def fix_seed(seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
+        torch.use_deterministic_algorithms(True)
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
+
+
+def count_params(model):
+    # Core
+    core_params = sum(p.numel() for p in model.core.parameters())
+
+    # Embedding per session
+    embedding_params = sum(
+        sum(p.numel() for p in v.parameters())
+        for v in model.embedding.linear.values()
+    )
+
+    # Readout per session
+    readout_params = sum(
+        sum(p.numel() for p in v.parameters())
+        for v in model.readout.linear.values()
+    )
+
+    return {
+        "core": core_params,
+        "embedding": embedding_params,
+        "readout": readout_params,
+    }
+
+
+def params_per_session(model):
+    # Core (shared across sessions)
+    core_param_count = sum(p.numel() for p in model.core.parameters())
+
+    # Embedding and readout per session
+    session_names = model.embedding.linear.keys()
+    result = {}
+
+    for session in session_names:
+        emb_count = sum(
+            p.numel() for p in model.embedding.linear[session].parameters()
+        )
+        read_count = sum(
+            p.numel() for p in model.readout.linear[session].parameters()
+        )
+        total = emb_count + core_param_count + read_count
+
+        result[session] = {
+            "embedding": 100 * emb_count / total,
+            "core": 100 * core_param_count / total,
+            "readout": 100 * read_count / total,
+            "total_params": total,
+        }
+
+    return result

@@ -1,13 +1,11 @@
 import torch
 
-from . import utils
-
 
 class SoftplusReadout(torch.nn.Module):
     def __init__(self, config, n_directions):
         super().__init__()
 
-        self.readout = torch.nn.ModuleDict(
+        self.softplus = torch.nn.ModuleDict(
             {
                 session: torch.nn.Sequential(
                     torch.nn.Linear(
@@ -21,14 +19,14 @@ class SoftplusReadout(torch.nn.Module):
         )
 
     def forward(self, x, session):
-        return self.readout[session](x)
+        return self.softplus[session](x)
 
 
 class LinearReadout(torch.nn.Module):
     def __init__(self, config, n_directions):
         super().__init__()
 
-        self.readout = torch.nn.ModuleDict(
+        self.linear = torch.nn.ModuleDict(
             {
                 session: torch.nn.Linear(
                     n_directions * config["model"]["hidden_dim"],
@@ -39,38 +37,39 @@ class LinearReadout(torch.nn.Module):
         )
 
     def forward(self, x, session):
-        return self.readout[session](x)
+        return self.linear[session](x)
 
 
 class LinearEmbedding(torch.nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        self.embedding = torch.nn.ModuleDict(
+        self.linear = torch.nn.ModuleDict(
             {
                 session: torch.nn.Linear(
                     config["model"]["in_dim"][session],
-                    config["model"]["hidden_dim"],
+                    config["model"]["embedding_dim"],
                 )
                 for session in config["sessions"]
             }
         )
 
     def forward(self, x, session):
-        return self.embedding[session](x)
+        return self.linear[session](x)
 
 
 class FCModel(torch.nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        self.in_layer = LinearEmbedding(config)
+        self.embedding = LinearEmbedding(config)
 
         self.core = torch.nn.ModuleList(
             [
                 torch.nn.Sequential(
                     torch.nn.Linear(
-                        config["model"]["hidden_dim"], config["model"]["hidden_dim"]
+                        config["model"]["embedding_dim"],
+                        config["model"]["embedding_dim"],
                     ),
                     torch.nn.ReLU(),
                 )
@@ -79,17 +78,19 @@ class FCModel(torch.nn.Module):
         )
 
         if config["model"]["readout"] == "softplus":
-            self.out_layer = SoftplusReadout(config, n_directions=1)
+            self.readout = SoftplusReadout(config, n_directions=1)
         elif config["model"]["readout"] == "linear":
-            self.out_layer = LinearReadout(config, n_directions=1)
+            self.readout = LinearReadout(config, n_directions=1)
         else:
-            raise ValueError(f"readout {config['model']['readout']} not implemented.")
+            raise ValueError(
+                f"readout {config['model']['readout']} not implemented."
+            )
 
     def forward(self, x, session):
-        y = self.in_layer(x, session)
+        y = self.embedding(x, session)
         for layer in self.core:
             y = layer(y)
-        y = self.out_layer(y, session)
+        y = self.readout(y, session)
         return y
 
 
@@ -97,10 +98,10 @@ class GRUModel(torch.nn.Module):
     def __init__(self, config):
         super().__init__()
 
-        self.in_layer = LinearEmbedding(config)
+        self.embedding = LinearEmbedding(config)
 
         self.core = torch.nn.GRU(
-            input_size=config["model"]["hidden_dim"],
+            input_size=config["model"]["embedding_dim"],
             hidden_size=config["model"]["hidden_dim"],
             num_layers=config["model"]["n_layers"],
             batch_first=True,
@@ -111,16 +112,18 @@ class GRUModel(torch.nn.Module):
         n_directions = 2 if config["model"].get("bidirectional", True) else 1
 
         if config["model"]["readout"] == "softplus":
-            self.out_layer = SoftplusReadout(config, n_directions)
+            self.readout = SoftplusReadout(config, n_directions)
         elif config["model"]["readout"] == "linear":
-            self.out_layer = LinearReadout(config, n_directions)
+            self.readout = LinearReadout(config, n_directions)
         else:
-            raise ValueError(f"readout {config['model']['readout']} not implemented.")
+            raise ValueError(
+                f"readout {config['model']['readout']} not implemented."
+            )
 
     def forward(self, x, session):
-        y = self.in_layer(x, session)
+        y = self.embedding(x, session)
         y = self.core(y)[0]
-        y = self.out_layer(y, session)
+        y = self.readout(y, session)
         return y
 
 
@@ -143,5 +146,7 @@ def losses_map(loss_fn):
         return torch.nn.PoissonNLLLoss(log_input=False, full=True)
     elif loss_fn == "crossentropy":
         return SequentialCrossEntropyLoss()
+    elif loss_fn == "mse":
+        return torch.nn.MSELoss()
     else:
         raise ValueError(f"loss function {loss_fn} not implemented.")
