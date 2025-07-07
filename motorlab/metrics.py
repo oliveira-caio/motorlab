@@ -8,14 +8,24 @@ from sklearn.metrics import balanced_accuracy_score
 def compute(gts, preds, metric):
     if metric == "accuracy":
         return accuracy(gts, preds)
-    elif metric == "l2":
-        pass
+    elif metric == "mse":
+        return mse(gts, preds)
     elif metric == "correlation":
         return global_correlation(gts, preds, reduce=True), local_correlation(
             gts, preds, reduce=True
         )
     else:
         raise ValueError(f"metric {metric} not implemented.")
+
+
+def mse(gts, preds):
+    mses = []
+    for session in preds:
+        pred = preds[session]
+        gt = gts[session]
+        tmp = np.mean((gt - pred) ** 2)
+        mses.append(tmp)
+    return np.mean(mses)
 
 
 def balanced_accuracy(gt, pred):

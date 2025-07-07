@@ -21,7 +21,7 @@ def track(metrics, config, model):
     if config["track"].get("wandb", False):
         wandb.log({k: v for k, v in metrics.items() if k != "epoch"})
     if (
-        config["track"].get("checkpoint", False)
+        config["track"].get("save_checkpoint", False)
         and metrics["epoch"] != config["train"]["n_epochs"]
         and (metrics["epoch"] - 1) % 25 == 0
         and metrics["epoch"] != 1
@@ -32,7 +32,7 @@ def track(metrics, config, model):
 def format_metrics(metrics):
     formatted = []
     for key, value in metrics.items():
-        if "loss" in key:
+        if "loss" in key or "mse" in key:
             formatted.append(f"{key}: {value:.4f}")
         elif "accuracy" in key:
             formatted.append(f"{key}: {value:.2f}")
@@ -82,20 +82,17 @@ def iterate(
     out_modalities,
     loss_fns,
     optimizer,
-    mode,
     config,
+    is_train=False,
 ):
-    is_train = mode == "train"
     model.train() if is_train else model.eval()
-    gts = dict()
-    preds = dict()
+    gts = {session: [] for session in dataloaders}
+    preds = {session: [] for session in dataloaders}
     track_metrics = dict()
     losses = []
 
     with torch.set_grad_enabled(is_train):
         for session in dataloaders:
-            gts[session] = []
-            preds[session] = []
             for d in dataloaders[session]:
                 x = torch.cat([d[m] for m in in_modalities], dim=-1).to(
                     utils.device
@@ -125,9 +122,10 @@ def iterate(
             for session in preds
         }
 
-        track_metrics[config["metric"]] = metrics.compute(
-            stacked_gts, stacked_preds, config["metric"]
-        )
+        if "metric" in config:
+            track_metrics[config["metric"]] = metrics.compute(
+                stacked_gts, stacked_preds, config["metric"]
+            )
 
         if is_train:
             grad_norm = sum(
@@ -149,6 +147,7 @@ def loop(
     out_modalities,
     loss_fns,
     optimizer,
+    scheduler,
     config,
 ):
     valid_metrics, _, _ = iterate(
@@ -158,13 +157,11 @@ def loop(
         out_modalities,
         loss_fns,
         optimizer,
-        "validation",
         config,
     )
     valid_metrics["epoch"] = 1
-    track(valid_metrics, config, model)
-    # first_epoch = config["train"].get("first_epoch", 0)
-    # last_epoch = first_epoch + config["train"].get("n_epochs", 20)
+    if "track" in config:
+        track(valid_metrics, config, model)
 
     for i in range(config["train"]["n_epochs"]):
         train_metrics, _, _ = iterate(
@@ -174,11 +171,12 @@ def loop(
             out_modalities,
             loss_fns,
             optimizer,
-            "train",
             config,
+            is_train=True,
         )
         train_metrics["epoch"] = i + 1
-        track(train_metrics, config, model)
+        if "track" in config:
+            track(train_metrics, config, model)
 
         if ((i + 1) % 25) == 0:
             valid_metrics, _, _ = iterate(
@@ -188,17 +186,18 @@ def loop(
                 out_modalities,
                 loss_fns,
                 optimizer,
-                "validation",
                 config,
             )
             valid_metrics["epoch"] = i + 1
-            track(valid_metrics, config, model)
+            if "track" in config:
+                track(valid_metrics, config, model)
 
+        scheduler.step()
         if train_metrics["grad_norm"] < 1e-5 or np.isnan(train_metrics["loss"]):
             break
 
 
-def create_model(config, is_train, load_model, freeze_core):
+def create_model(config, is_train):
     if config["architecture"] == "gru":
         model = modules.GRUModel(config)
     elif config["architecture"] == "fc":
@@ -208,28 +207,45 @@ def create_model(config, is_train, load_model, freeze_core):
             f"architecture not implemented: {config['architecture']}."
         )
 
-    if load_model or not is_train:
-        CHECKPOINT_DIR = Path(config["CHECKPOINT_DIR"])
+    if "uid" in config or not is_train:
+        CHECKPOINT_DIR = Path(
+            config["CHECKPOINT_LOAD_DIR"]
+            if "CHECKPOINT_LOAD_DIR" in config
+            else config["CHECKPOINT_DIR"]
+        )
+
         if "load_epoch" in config:
             CHECKPOINT_PATH = (
                 CHECKPOINT_DIR / f"{config['uid']}_{config['load_epoch']}.pt"
             )
         else:
             CHECKPOINT_PATH = CHECKPOINT_DIR / f"{config['uid']}.pt"
-        model.load_state_dict(
-            torch.load(CHECKPOINT_PATH, map_location=utils.device)
+
+        model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location="cpu"))
+
+    if config.get("freeze_core", False):
+        CHECKPOINT_DIR = Path(
+            config["CHECKPOINT_LOAD_DIR"]
+            if "CHECKPOINT_LOAD_DIR" in config
+            else config["CHECKPOINT_DIR"]
         )
 
-    if freeze_core:
-        CHECKPOINT_DIR = Path(config["CHECKPOINT_DIR"])
-        CHECKPOINT_PATH = CHECKPOINT_DIR / f"{config['uid']}.pt"
-        state_dict = torch.load(CHECKPOINT_PATH, map_location=utils.device)
+        if "load_epoch" in config:
+            CHECKPOINT_PATH = (
+                CHECKPOINT_DIR / f"{config['uid']}_{config['load_epoch']}.pt"
+            )
+        else:
+            CHECKPOINT_PATH = CHECKPOINT_DIR / f"{config['uid']}.pt"
+
+        state_dict = torch.load(CHECKPOINT_PATH, map_location="cpu")
         filtered_state_dict = {
             k: v
             for k, v in state_dict.items()
             if "in_layer" in k or "core" in k
         }
         model.load_state_dict(filtered_state_dict, strict=False)
+
+        # todo: to make this more flexible, create a list of modules to freeze, loop over this list and freeze only the params of the listed modules.
         for param in model.embedding.parameters():
             param.requires_grad = False
 
@@ -250,9 +266,13 @@ def create_loss_fns(config):
     }
 
 
-def create_datasets(data_dict, intervals):
+def create_datasets(data_dict, intervals, config):
     return {
-        session: datasets.Deterministic(data_dict[session], intervals[session])
+        session: datasets.Deterministic(
+            data_dict[session],
+            intervals[session],
+            config,
+        )
         for session in data_dict
     }
 
@@ -267,7 +287,11 @@ def create_dataloaders(datasets, is_train=False):
 
 
 def save_config(config):
-    CONFIG_DIR = Path(config["CONFIG_DIR"])
+    CONFIG_DIR = Path(
+        config["CONFIG_SAVE_DIR"]
+        if "CONFIG_SAVE_DIR" in config
+        else config["CONFIG_DIR"]
+    )
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH = CONFIG_DIR / f"{config['uid']}.yaml"
     with open(CONFIG_PATH, "w") as f:
@@ -275,22 +299,19 @@ def save_config(config):
 
 
 def save_checkpoint(model, config, epoch=None):
-    CHECKPOINT_DIR = Path(config["CHECKPOINT_DIR"])
+    CHECKPOINT_DIR = Path(
+        config["CHECKPOINT_SAVE_DIR"]
+        if "CHECKPOINT_SAVE_DIR" in config
+        else config["CHECKPOINT_DIR"]
+    )
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    if epoch:
-        CHECKPOINT_PATH = CHECKPOINT_DIR / f"{config['uid']}_{epoch}.pt"
-    else:
-        CHECKPOINT_PATH = CHECKPOINT_DIR / f"{config['uid']}.pt"
+    filename = f"{config['uid']}_{epoch}.pt" if epoch else f"{config['uid']}.pt"
+    CHECKPOINT_PATH = CHECKPOINT_DIR / filename
     torch.save(model.state_dict(), CHECKPOINT_PATH)
 
 
 def setup(config, is_train):
-    if is_train and "uid" not in config:
-        uid = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-        config["uid"] = uid
-        print(f"uid: {uid}")
-
-    utils.fix_seed(config["seed"])
+    utils.fix_seed(config.get("seed", 0))
     in_modalities = utils.list_modalities(config["in_modalities"])
     out_modalities = utils.list_modalities(config["out_modalities"])
     data_dict = data.load_all(config)
@@ -316,23 +337,30 @@ def setup(config, is_train):
                 for session in config["sessions"]
             }
 
-    model = create_model(
-        config,
-        is_train,
-        config.get("load_model", False),
-        config.get("freeze_core", False),
-    )
+    model = create_model(config, is_train)
     loss_fns = create_loss_fns(config)
+
+    if is_train:
+        uid = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        if "uid" in config:
+            config["old_uid"] = config["uid"]
+        config["uid"] = str(uid)
+        print(f"uid: {uid}")
 
     return model, data_dict, loss_fns
 
 
 def train(config):
     model, data_dict, loss_fns = setup(config, is_train=True)
+
     _, train_intervals, valid_intervals = utils.extract_intervals(config)
-    train_datasets = create_datasets(data_dict, train_intervals)
+    train_datasets = create_datasets(
+        data_dict, train_intervals, config["dataset"]
+    )
     train_dataloaders = create_dataloaders(train_datasets, is_train=False)
-    valid_datasets = create_datasets(data_dict, valid_intervals)
+    valid_datasets = create_datasets(
+        data_dict, valid_intervals, config["dataset"]
+    )
     valid_dataloaders = create_dataloaders(valid_datasets)
 
     params = (
@@ -342,8 +370,11 @@ def train(config):
     )
     optimizer = torch.optim.Adam(
         params,
-        lr=config["train"].get("lr", 3e-4),
+        lr=config["train"].get("lr", 5e-3),
         weight_decay=config["train"].get("weight_decay", 0.0),
+    )
+    scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer, step_size=25, gamma=0.4
     )
 
     loop(
@@ -354,6 +385,7 @@ def train(config):
         utils.list_modalities(config["out_modalities"]),
         loss_fns,
         optimizer,
+        scheduler,
         config,
     )
 
@@ -365,7 +397,9 @@ def train(config):
 def evaluate(config):
     model, data_dict, loss_fns = setup(config, is_train=False)
     test_intervals = utils.extract_intervals(config)[0]
-    test_datasets = create_datasets(data_dict, test_intervals)
+    test_datasets = create_datasets(
+        data_dict, test_intervals, config["dataset"]
+    )
     test_dataloaders = create_dataloaders(test_datasets)
 
     metrics, gts, preds = iterate(
@@ -375,7 +409,6 @@ def evaluate(config):
         utils.list_modalities(config["out_modalities"]),
         loss_fns,
         optimizer=None,
-        mode="eval",
         config=config,
     )
 

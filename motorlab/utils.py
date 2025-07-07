@@ -140,14 +140,17 @@ def extract_intervals(config):
 
     for session in config["sessions"]:
         TRIALS_DIR = Path(f"{config['DATA_DIR']}/{session}/trials")
-        intervals = extract_trials_intervals(TRIALS_DIR)
+        intervals = []
 
-        if config["homing"]:
+        if config.get("include_trial", True):
+            intervals += extract_trials_intervals(TRIALS_DIR)
+
+        if config.get("include_homing", False):
             intervals += extract_homing_intervals(TRIALS_DIR)
 
-        if config.get("filter", "") == "sitting":
+        if config.get("filter_sitting", False):
             tiles = data.load_tiles(
-                config["DATA_DIR"], session, config["experiment"]
+                config["DATA_DIR"], session, config["experiment"], "tiles"
             )
             intervals = filter_sitting(tiles, intervals)
 
@@ -181,7 +184,7 @@ def list_modalities(modalities):
         return ["poses"]
     elif modalities == "kinematics":
         return ["poses", "speed", "acceleration"]
-    elif modalities == "poses_spikes":
+    elif modalities == "poses_spike_count":
         return ["poses", "spike_count"]
     elif modalities == "position":
         return ["position"]

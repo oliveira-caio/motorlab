@@ -197,7 +197,7 @@ def compute_acceleration(speed):
     return accel
 
 
-def compute_com(poses, experiment):
+def compute_com(poses, experiment: str):
     duration, n_3d_keypoints = poses.shape
     poses = poses.reshape(duration, n_3d_keypoints // 3, 3)
     com = poses[:, com_keypoints[experiment], :2].mean(axis=1)
@@ -327,7 +327,7 @@ def plot(
         update_fig(fig, ax)
 
 
-def plot_com(DATA_DIR, sessions=None, ncols=3, homing=False):
+def plot_com(DATA_DIR, sessions=None, ncols=3, homing=False, save_path=None):
     DATA_DIR = Path(DATA_DIR)
     if sessions is None:
         sessions = [DATA_DIR.name]
@@ -363,5 +363,8 @@ def plot_com(DATA_DIR, sessions=None, ncols=3, homing=False):
             axs[i].plot(com[start:end, 0], com[start:end, 1], color="b")
             axs[i].set_title(s)
 
-    fig.tight_layout()
+    if save_path:
+        plt.savefig(save_path, bbox_inches="tight", dpi=300)
+
+    plt.tight_layout()
     plt.show()

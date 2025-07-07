@@ -1,3 +1,4 @@
+from . import config
 from . import data
 from . import datasets
 from . import metrics
@@ -6,4 +7,5 @@ from . import modules
 from . import poses
 from . import plot
 from . import room
+from . import spikes
 from . import utils
