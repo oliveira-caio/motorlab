@@ -1,6 +1,7 @@
 from . import config
 from . import data
 from . import datasets
+from . import intervals
 from . import metrics
 from . import model
 from . import modules

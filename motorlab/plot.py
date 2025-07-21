@@ -1,21 +1,45 @@
+import warnings
+
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import sklearn
 
+from lipstick import GifMaker, update_fig
+
+from . import data
 from . import metrics
 from . import poses
 from . import room
+from . import utils
 
 
 def confusion_matrix(
-    gts, preds, group=None, include_sitting=False, save_path=None
+    gts, preds, group=None, include_sitting=False, concat=False, save_path=None
 ):
     def group_y(x):
         return x // 3
 
     def group_x(x):
         return x % 3
+
+    if concat:
+        gts = {
+            "all": np.concatenate(list(gts.values()), axis=0),
+        }
+
+        preds = {
+            "all": np.concatenate(list(preds.values()), axis=0),
+        }
+
+    if not include_sitting:
+        to_filter = [0, 1, 2, 12, 13, 14]
+        for session in gts:
+            indices = np.where(np.isin(gts[session], to_filter))[0]
+            gts[session] = np.delete(gts[session], indices, axis=0)
+            preds[session] = np.delete(preds[session], indices, axis=0)
 
     n_sessions = len(gts)
     n_cols = 2
@@ -56,10 +80,10 @@ def confusion_matrix(
             gt = gts[session]
             pred = preds[session]
 
+        acc = metrics.balanced_accuracy(gt, pred)
         conf_mat = sklearn.metrics.confusion_matrix(
             gt, pred, labels=tiles_vec, normalize="true"
         )
-        acc = metrics.balanced_accuracy(gt, pred)
 
         sns.heatmap(
             conf_mat,
@@ -83,9 +107,7 @@ def confusion_matrix(
     plt.show()
 
 
-def room_histogram2d(
-    gts, preds, concat=False, experiment="gbyk", colorbar=True, save_path=None
-):
+def room_histogram2d(gts, preds, concat=False, colorbar=True, save_path=None):
     if concat:
         gts = {
             "all": np.concatenate(list(gts.values()), axis=0),
@@ -113,7 +135,8 @@ def room_histogram2d(
         gt = gts[session]
         pred = preds[session]
         acc = metrics.balanced_accuracy(
-            room.extract_tiles(gt), room.extract_tiles(pred)
+            room.get_tiles(gt[:, 0], gt[:, 1]),
+            room.get_tiles(pred[:, 0], pred[:, 1]),
         )
 
         i, j = divmod(idx, ncols)
@@ -183,4 +206,126 @@ def room_histogram2d(
     if save_path:
         plt.savefig(save_path, bbox_inches="tight", dpi=300)
 
+    plt.show()
+
+
+def poses3d(
+    data,
+    experiment,
+    save_path=None,
+    return_fig=False,
+    fps=20,
+):
+    """
+    Plot or animate 3D human pose(s) using a given skeleton structure.
+
+    Parameters:
+    - poses (ndarray): Array of shape (J, 3) or (T, J, 3) representing 3D joint positions.
+    - save_path (str, optional): If given and ends with .gif, saves output GIF here.
+    - return_fig (bool, optional): If True, returns list of Figures instead of displaying/saving.
+    - fps (int, optional): Frames per second for GIF export if `poses` is 3D.
+
+    Returns:
+    - matplotlib.figure.Figure, list of Figures, or None.
+    """
+
+    def draw_pose(pose):
+        fig = plt.figure()
+        ax = fig.add_subplot(111, projection="3d")
+
+        for s, e in poses.skeleton:
+            x = [
+                pose[poses.keypoints_dict[experiment][s], 0],
+                pose[poses.keypoints_dict[experiment][e], 0],
+            ]
+            y = [
+                pose[poses.keypoints_dict[experiment][s], 1],
+                pose[poses.keypoints_dict[experiment][e], 1],
+            ]
+            z = [
+                pose[poses.keypoints_dict[experiment][s], 2],
+                pose[poses.keypoints_dict[experiment][e], 2],
+            ]
+            ax.plot(x, y, z, color="blue")
+
+        ax.set_xlim(-0.5, 0.5)
+        ax.set_ylim(-0.5, 0.5)
+        ax.set_zlim(-1, 1)
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_zlabel("z")
+        ax.view_init(elev=15, azim=70)
+        ax.set_box_aspect([1, 1, 1])
+        ax.grid(False)
+        return fig, ax
+
+    duration, n_3d_keypoints = (
+        data.shape if len(data.shape) > 1 else (1, len(data))
+    )
+    if duration > 500:
+        duration = 300
+        warnings.warn(
+            "too many frames, the gif will be truncated to 300 frames only."
+        )
+
+    data = np.atleast_3d(data.reshape(duration, n_3d_keypoints // 3, 3))
+    figs = [draw_pose(pose) for pose in data]
+
+    if return_fig:
+        return figs
+
+    if save_path and len(figs) > 1:
+        with GifMaker(save_path, fps=fps) as gif:
+            for fig, _ in figs:
+                gif.add(fig)
+        return
+    elif save_path:
+        fig, ax = draw_pose(data[0])
+        fig.savefig(save_path, bbox_inches="tight")
+        return
+
+    for fig, ax in figs:
+        update_fig(fig, ax)
+
+
+def com(DATA_DIR, sessions=None, ncols=3, homing=False, save_path=None):
+    DATA_DIR = Path(DATA_DIR)
+    if sessions is None:
+        sessions = [DATA_DIR.name]
+        DATA_DIR = DATA_DIR.parent
+
+    n_sessions = len(sessions)
+    ncols = min(ncols, n_sessions)
+    nrows = (n_sessions + ncols - 1) // ncols
+
+    fig, axs = plt.subplots(
+        nrows=nrows,
+        ncols=ncols,
+        figsize=(ncols * 3.5, nrows * 3.5),
+        sharex=True,
+        sharey=True,
+        squeeze=False,
+    )
+    axs = axs.flat
+
+    for i, s in enumerate(sessions):
+        POSES_DIR = DATA_DIR / s / "poses"
+        poses_ = data.load_from_memmap(POSES_DIR)
+        poses_ = poses_.reshape(-1, 21, 3)
+        com = poses_[:, poses.com_keypoints_idxs["gbyk"], :2].mean(axis=1)
+
+        TRIALS_DIR = DATA_DIR / s / "trials"
+        if homing:
+            intervals = utils.get_homing_intervals(TRIALS_DIR)
+        else:
+            intervals = utils.get_trials_intervals(TRIALS_DIR)
+
+        for start, end in intervals:
+            axs[i].plot(com[start:end, 0], com[start:end, 1], color="b")
+            axs[i].set_title(s)
+
+    if save_path:
+        plt.savefig(save_path, bbox_inches="tight", dpi=300)
+
+    plt.tight_layout()
     plt.show()

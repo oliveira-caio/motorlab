@@ -5,30 +5,39 @@ import numpy as np
 from sklearn.metrics import balanced_accuracy_score
 
 
-def compute(gts, preds, metric):
+def compute(gts: dict, preds: dict, metric: str):
     if metric == "accuracy":
-        return accuracy(gts, preds)
+        return np.mean(
+            [
+                accuracy(gt, pred)
+                for gt, pred in zip(gts.values(), preds.values())
+            ]
+        )
     elif metric == "mse":
-        return mse(gts, preds)
+        return np.mean(
+            [mse(gt, pred) for gt, pred in zip(gts.values(), preds.values())]
+        )
     elif metric == "correlation":
-        return global_correlation(gts, preds, reduce=True), local_correlation(
-            gts, preds, reduce=True
+        return np.mean(
+            [
+                global_correlation(gt, pred)
+                for gt, pred in zip(gts.values(), preds.values())
+            ]
+        ), np.mean(
+            [
+                local_correlation(gt, pred)
+                for gt, pred in zip(gts.values(), preds.values())
+            ]
         )
     else:
         raise ValueError(f"metric {metric} not implemented.")
 
 
-def mse(gts, preds):
-    mses = []
-    for session in preds:
-        pred = preds[session]
-        gt = gts[session]
-        tmp = np.mean((gt - pred) ** 2)
-        mses.append(tmp)
-    return np.mean(mses)
+def mse(gt: np.ndarray, pred: np.ndarray) -> float:
+    return np.mean((gt - pred) ** 2).item()
 
 
-def balanced_accuracy(gt, pred):
+def balanced_accuracy(gt: np.ndarray, pred: np.ndarray) -> float:
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
@@ -39,69 +48,50 @@ def balanced_accuracy(gt, pred):
         return balanced_accuracy_score(gt, pred)
 
 
-def accuracy(gts, preds):
-    accs = []
-    for session in preds:
-        pred = preds[session]
-        pred = pred.reshape(-1, pred.shape[-1])
-        pred = pred.argmax(axis=-1)
-        gt = gts[session]
-        gt = gt.reshape(-1)
-        accs.append(balanced_accuracy(gt, pred))
-    return np.mean(accs)
+def accuracy(gt: np.ndarray, pred: np.ndarray) -> float:
+    pred = pred.reshape(-1, pred.shape[-1])
+    pred = pred.argmax(axis=-1)
+    gt = gt.reshape(-1)
+    return balanced_accuracy(gt, pred)
 
 
-def global_correlation(gts, preds, reduce=False):
-    global_corr = {}
+def global_correlation(gt: np.ndarray, pred: np.ndarray, reduce: bool = True):
+    # gt, pred: (batch_size, seq_len, n_features)
+    pred = pred.reshape(-1, pred.shape[-1])
+    gt = gt.reshape(-1, gt.shape[-1])
 
-    for session in preds:
-        pred = preds[session].reshape(-1, preds[session].shape[-1])
-        gt = gts[session].reshape(-1, gts[session].shape[-1])
+    pred_centered = pred - np.nanmean(pred, axis=0)
+    gt_centered = gt - np.nanmean(gt, axis=0)
 
-        pred_centered = pred - np.nanmean(pred, axis=0)
-        gt_centered = gt - np.nanmean(gt, axis=0)
+    num = np.nansum(pred_centered * gt_centered, axis=0)
+    den = np.sqrt(
+        np.nansum(pred_centered**2, axis=0) * np.nansum(gt_centered**2, axis=0)
+    )
 
-        numerator = np.nansum(pred_centered * gt_centered, axis=0)
-        denominator = np.sqrt(
-            np.nansum(pred_centered**2, axis=0)
-            * np.nansum(gt_centered**2, axis=0)
-        )
-
-        global_corr[session] = numerator / denominator
+    global_corr = num / den
 
     if reduce:
-        return np.nanmean([np.nanmean(corr) for corr in global_corr.values()])
+        global_corr = np.nanmean(global_corr).item()
 
     return global_corr
 
 
-def local_correlation(gts, preds, reduce=False):
-    local_corr = {}
+def local_correlation(gt: np.ndarray, pred: np.ndarray, reduce: bool = True):
+    # gt, pred: (batch_size, seq_len, n_features)
+    gt_centered = gt - np.nanmean(gt, axis=1, keepdims=True)
+    pred_centered = pred - np.nanmean(pred, axis=1, keepdims=True)
 
-    for session in preds:
-        preds_sess = np.stack(preds[session])  # (n_trials, n_time, n_channels)
-        gts_sess = np.stack(gts[session])
+    numerator = np.nansum(pred_centered * gt_centered, axis=1)
+    denom = np.sqrt(
+        np.nansum(pred_centered**2, axis=1) * np.nansum(gt_centered**2, axis=1)
+    )
 
-        # Center predictions and targets per trial
-        preds_centered = preds_sess - np.nanmean(
-            preds_sess, axis=1, keepdims=True
-        )
-        gts_centered = gts_sess - np.nanmean(gts_sess, axis=1, keepdims=True)
+    corr = numerator / denom
+    corr = np.where(denom != 0, corr, np.nan)
 
-        # Compute per-trial correlation numerators and denominators
-        numerator = np.nansum(preds_centered * gts_centered, axis=1)
-        denom = np.sqrt(
-            np.nansum(preds_centered**2, axis=1)
-            * np.nansum(gts_centered**2, axis=1)
-        )
-
-        # Trial-wise correlations (n_trials, n_channels)
-        corr = numerator / denom
-
-        # Average over trials for each channel
-        local_corr[session] = np.nanmean(corr, axis=0)
+    local_corr = np.nanmean(corr, axis=0)  # (n_features,)
 
     if reduce:
-        return np.nanmean([np.nanmean(corr) for corr in local_corr.values()])
+        local_corr = np.nanmean(local_corr).item()
 
     return local_corr

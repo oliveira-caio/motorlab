@@ -11,7 +11,7 @@ x_divisions = 3
 y_divisions = 5
 
 
-def get_tile(xs, ys):
+def get_tiles(xs, ys):
     tile_width = x_size / x_divisions
     tile_height = y_size / y_divisions
 
@@ -25,12 +25,6 @@ def get_tile(xs, ys):
     # tiles are numbered left-to-right, bottom-to-top.
     tile_number = row * x_divisions + col
     return tile_number
-
-
-def extract_tiles(com):
-    tiles = get_tile(com[:, 0], com[:, 1])
-    tiles = tiles[:, np.newaxis]
-    return tiles
 
 
 def plot(save_path=None):

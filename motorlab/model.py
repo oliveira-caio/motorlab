@@ -8,11 +8,7 @@ import wandb
 import yaml
 
 
-from . import data
-from . import datasets
-from . import metrics
-from . import modules
-from . import utils
+from . import data, datasets, intervals, metrics, modules, utils
 
 
 def track(metrics, config, model):
@@ -75,14 +71,49 @@ def model_mean(model):
     return mean_val.item()
 
 
+def iterate_entire_trials(model, dataloaders, seq_length, metric=None):
+    model.eval()
+    gts = {session: [] for session in dataloaders}
+    preds = {session: [] for session in dataloaders}
+    track_metrics = dict()
+
+    with torch.set_grad_enabled(False):
+        for session in dataloaders:
+            for x_trial, y_trial in dataloaders[session]:
+                x_trial = x_trial.to(utils.device)
+                pred = torch.cat(
+                    [
+                        model(x, session)
+                        for x in torch.tensor_split(
+                            x_trial, x_trial.shape[1] // seq_length, dim=1
+                        )
+                    ],
+                    dim=1,
+                )
+                gts[session].append(y_trial[0].detach().cpu().numpy())
+                preds[session].append(pred[0].detach().cpu().numpy())
+
+    stacked_gts = {
+        session: np.concatenate(gt, axis=0) for session, gt in gts.items()
+    }
+    stacked_preds = {
+        session: np.concatenate(pred, axis=0) for session, pred in preds.items()
+    }
+
+    if metric is not None:
+        track_metrics[metric] = metrics.compute(
+            stacked_gts, stacked_preds, metric
+        )
+
+    return track_metrics, gts, preds
+
+
 def iterate(
     model,
     dataloaders,
-    in_modalities,
-    out_modalities,
     loss_fns,
     optimizer,
-    config,
+    metric=None,
     is_train=False,
 ):
     model.train() if is_train else model.eval()
@@ -93,38 +124,30 @@ def iterate(
 
     with torch.set_grad_enabled(is_train):
         for session in dataloaders:
-            for d in dataloaders[session]:
-                x = torch.cat([d[m] for m in in_modalities], dim=-1).to(
-                    utils.device
-                )
-                y = torch.cat([d[m] for m in out_modalities], dim=-1).to(
-                    utils.device
-                )
-
-                pred = model(x, session)
-                gts[session].append(y)
-                preds[session].append(pred)
+            for x_trial, y_trial in dataloaders[session]:
+                x_trial = x_trial.to(utils.device)
+                pred = model(x_trial, session)
+                gts[session].append(y_trial.detach().cpu().numpy())
+                preds[session].append(pred.detach().cpu().numpy())
 
                 if is_train:
                     optimizer.zero_grad()
-                    loss = loss_fns[session](pred, y)
+                    loss = loss_fns[session](pred, y_trial)
                     loss.backward()
                     optimizer.step()
                     losses.append(loss.item())
 
         stacked_gts = {
-            session: torch.cat(gts[session], dim=0).detach().cpu().numpy()
-            for session in gts
+            session: np.concatenate(gts[session], axis=0) for session in gts
         }
 
         stacked_preds = {
-            session: torch.cat(preds[session], dim=0).detach().cpu().numpy()
-            for session in preds
+            session: np.concatenate(preds[session], axis=0) for session in preds
         }
 
-        if "metric" in config:
-            track_metrics[config["metric"]] = metrics.compute(
-                stacked_gts, stacked_preds, config["metric"]
+        if metric is not None:
+            track_metrics[metric] = metrics.compute(
+                stacked_gts, stacked_preds, metric
             )
 
         if is_train:
@@ -143,8 +166,6 @@ def loop(
     model,
     train_dataloaders,
     valid_dataloaders,
-    in_modalities,
-    out_modalities,
     loss_fns,
     optimizer,
     scheduler,
@@ -153,11 +174,9 @@ def loop(
     valid_metrics, _, _ = iterate(
         model,
         valid_dataloaders,
-        in_modalities,
-        out_modalities,
         loss_fns,
         optimizer,
-        config,
+        config.get("metric", None),
     )
     valid_metrics["epoch"] = 1
     if "track" in config:
@@ -167,11 +186,9 @@ def loop(
         train_metrics, _, _ = iterate(
             model,
             train_dataloaders,
-            in_modalities,
-            out_modalities,
             loss_fns,
             optimizer,
-            config,
+            config.get("metric", None),
             is_train=True,
         )
         train_metrics["epoch"] = i + 1
@@ -182,11 +199,9 @@ def loop(
             valid_metrics, _, _ = iterate(
                 model,
                 valid_dataloaders,
-                in_modalities,
-                out_modalities,
                 loss_fns,
                 optimizer,
-                config,
+                config.get("metric", None),
             )
             valid_metrics["epoch"] = i + 1
             if "track" in config:
@@ -197,11 +212,13 @@ def loop(
             break
 
 
-def create_model(config, is_train):
-    if config["architecture"] == "gru":
+def load(config, is_train):
+    if config["model"]["architecture"] == "gru":
         model = modules.GRUModel(config)
-    elif config["architecture"] == "fc":
+    elif config["model"]["architecture"] == "fc":
         model = modules.FCModel(config)
+    elif config["model"]["architecture"] == "linreg":
+        model = modules.LinRegModel(config)
     else:
         raise ValueError(
             f"architecture not implemented: {config['architecture']}."
@@ -266,26 +283,6 @@ def create_loss_fns(config):
     }
 
 
-def create_datasets(data_dict, intervals, config):
-    return {
-        session: datasets.Deterministic(
-            data_dict[session],
-            intervals[session],
-            config,
-        )
-        for session in data_dict
-    }
-
-
-def create_dataloaders(datasets, is_train=False):
-    return {
-        session: torch.utils.data.DataLoader(
-            datasets[session], batch_size=64, shuffle=is_train
-        )
-        for session in datasets
-    }
-
-
 def save_config(config):
     CONFIG_DIR = Path(
         config["CONFIG_SAVE_DIR"]
@@ -310,11 +307,11 @@ def save_checkpoint(model, config, epoch=None):
     torch.save(model.state_dict(), CHECKPOINT_PATH)
 
 
-def setup(config, is_train):
+def setup(config, train_intervals, is_train):
     utils.fix_seed(config.get("seed", 0))
     in_modalities = utils.list_modalities(config["in_modalities"])
     out_modalities = utils.list_modalities(config["out_modalities"])
-    data_dict = data.load_all(config)
+    data_dict = data.load_all(config, train_intervals)
 
     if is_train:
         config["model"]["in_dim"] = {
@@ -337,7 +334,7 @@ def setup(config, is_train):
                 for session in config["sessions"]
             }
 
-    model = create_model(config, is_train)
+    model = load(config, is_train)
     loss_fns = create_loss_fns(config)
 
     if is_train:
@@ -351,17 +348,45 @@ def setup(config, is_train):
 
 
 def train(config):
-    model, data_dict, loss_fns = setup(config, is_train=True)
+    _, train_intervals, valid_intervals = intervals.get_tiers_intervals(
+        data_dir=config["DATA_DIR"],
+        sessions=config["sessions"],
+        experiment=config["experiment"],
+        include_trial=config["intervals"].get("include_trial", True),
+        include_homing=config["intervals"].get("include_homing", False),
+        include_sitting=config["intervals"].get("include_sitting", True),
+        shuffle=config["intervals"].get("shuffle", True),
+        seed=config.get("seed", 0),
+        percent_split=config["intervals"].get("percent_split", 20),
+    )
 
-    _, train_intervals, valid_intervals = utils.extract_intervals(config)
-    train_datasets = create_datasets(
-        data_dict, train_intervals, config["dataset"]
+    model, data_dict, loss_fns = setup(config, train_intervals, is_train=True)
+
+    train_datasets = datasets.load_datasets(
+        data_dict,
+        train_intervals,
+        utils.list_modalities(config["in_modalities"]),
+        utils.list_modalities(config["out_modalities"]),
+        entire_trials=config["dataset"].get("entire_trials", False),
+        seq_length=config["dataset"].get("seq_length", 20),
+        stride=config["dataset"].get("stride", 20),
     )
-    train_dataloaders = create_dataloaders(train_datasets, is_train=False)
-    valid_datasets = create_datasets(
-        data_dict, valid_intervals, config["dataset"]
+    train_dataloaders = datasets.load_dataloaders(
+        train_datasets, config["dataset"].get("batch_size", 64), is_train=True
     )
-    valid_dataloaders = create_dataloaders(valid_datasets)
+
+    valid_datasets = datasets.load_datasets(
+        data_dict,
+        valid_intervals,
+        utils.list_modalities(config["in_modalities"]),
+        utils.list_modalities(config["out_modalities"]),
+        entire_trials=config["dataset"].get("entire_trials", False),
+        seq_length=config["dataset"].get("seq_length", 20),
+        stride=config["dataset"].get("stride", 20),
+    )
+    valid_dataloaders = datasets.load_dataloaders(
+        valid_datasets, config["dataset"].get("batch_size", 64), is_train=False
+    )
 
     params = (
         model.parameters()
@@ -371,7 +396,6 @@ def train(config):
     optimizer = torch.optim.Adam(
         params,
         lr=config["train"].get("lr", 5e-3),
-        weight_decay=config["train"].get("weight_decay", 0.0),
     )
     scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer, step_size=25, gamma=0.4
@@ -381,8 +405,6 @@ def train(config):
         model,
         train_dataloaders,
         valid_dataloaders,
-        utils.list_modalities(config["in_modalities"]),
-        utils.list_modalities(config["out_modalities"]),
         loss_fns,
         optimizer,
         scheduler,
@@ -395,21 +417,47 @@ def train(config):
 
 
 def evaluate(config):
-    model, data_dict, loss_fns = setup(config, is_train=False)
-    test_intervals = utils.extract_intervals(config)[0]
-    test_datasets = create_datasets(
-        data_dict, test_intervals, config["dataset"]
+    test_intervals, train_intervals, _ = intervals.get_tiers_intervals(
+        data_dir=config["DATA_DIR"],
+        sessions=config["sessions"],
+        experiment=config["experiment"],
+        include_trial=config["intervals"].get("include_trial", True),
+        include_homing=config["intervals"].get("include_homing", False),
+        include_sitting=config["intervals"].get("include_sitting", True),
+        shuffle=config["intervals"].get("shuffle", True),
+        seed=config.get("seed", 0),
+        percent_split=config["intervals"].get("percent_split", 20),
     )
-    test_dataloaders = create_dataloaders(test_datasets)
-
-    metrics, gts, preds = iterate(
-        model,
-        test_dataloaders,
+    model, data_dict, loss_fns = setup(config, train_intervals, is_train=False)
+    test_datasets = datasets.load_datasets(
+        data_dict,
+        test_intervals,
         utils.list_modalities(config["in_modalities"]),
         utils.list_modalities(config["out_modalities"]),
-        loss_fns,
-        optimizer=None,
-        config=config,
+        entire_trials=config["dataset"].get("entire_trials", False),
+        seq_length=config["dataset"].get("seq_length", 20),
+        stride=config["dataset"].get("stride", 20),
     )
+    test_dataloaders = datasets.load_dataloaders(
+        test_datasets,
+        batch_size=config["dataset"].get("batch_size", 64),
+        is_train=False,
+    )
+
+    if not config["dataset"].get("entire_trials", False):
+        metrics, gts, preds = iterate(
+            model,
+            test_dataloaders,
+            loss_fns,
+            optimizer=None,
+            metric=config.get("metric", None),
+        )
+    else:
+        metrics, gts, preds = iterate_entire_trials(
+            model,
+            test_dataloaders,
+            config["dataset"].get("seq_length", 20),
+            metric=config.get("metric", None),
+        )
 
     return metrics, gts, preds

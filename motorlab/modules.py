@@ -58,24 +58,69 @@ class LinearEmbedding(torch.nn.Module):
         return self.linear[session](x)
 
 
+class LinRegModel(torch.nn.Module):
+    def __init__(self, config):
+        super().__init__()
+
+        self.readout = torch.nn.ModuleDict(
+            {
+                session: torch.nn.Linear(
+                    config["model"]["in_dim"][session],
+                    config["model"]["out_dim"][session],
+                )
+                for session in config["sessions"]
+            }
+        )
+
+    def forward(self, x, session):
+        return self.readout[session](x)
+
+
 class FCModel(torch.nn.Module):
     def __init__(self, config):
         super().__init__()
 
         self.embedding = LinearEmbedding(config)
 
-        self.core = torch.nn.ModuleList(
-            [
-                torch.nn.Sequential(
-                    torch.nn.Linear(
-                        config["model"]["embedding_dim"],
-                        config["model"]["embedding_dim"],
-                    ),
-                    torch.nn.ReLU(),
+        if config["model"]["n_layers"]:  # can be 0
+            if (
+                config["model"]["embedding_dim"]
+                == config["model"]["hidden_dim"]
+            ):
+                self.core = torch.nn.ModuleList(
+                    [
+                        torch.nn.Sequential(
+                            torch.nn.Linear(
+                                config["model"]["embedding_dim"],
+                                config["model"]["embedding_dim"],
+                            ),
+                            torch.nn.ReLU(),
+                        )
+                        for _ in range(config["model"]["n_layers"])
+                    ]
                 )
-                for _ in range(config["model"]["n_layers"])
-            ]
-        )
+            else:
+                self.core = torch.nn.ModuleList(
+                    [
+                        torch.nn.Sequential(
+                            torch.nn.Linear(
+                                config["model"]["embedding_dim"],
+                                config["model"]["hidden_dim"],
+                            ),
+                            torch.nn.ReLU(),
+                        )
+                    ]
+                    + [
+                        torch.nn.Sequential(
+                            torch.nn.Linear(
+                                config["model"]["hidden_dim"],
+                                config["model"]["hidden_dim"],
+                            ),
+                            torch.nn.ReLU(),
+                        )
+                        for _ in range(config["model"]["n_layers"] - 1)
+                    ]
+                )
 
         if config["model"]["readout"] == "softplus":
             self.readout = SoftplusReadout(config, n_directions=1)

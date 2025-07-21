@@ -1,192 +1,214 @@
+import warnings
+
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
-import yaml
 
-from lipstick import GifMaker, update_fig
-
-from . import data
 from . import utils
 
 
 skeleton = [
-    ["S_tail", "E_tail"],
-    ["S_tail", "L_hip"],
-    ["S_tail", "R_hip"],
-    ["R_knee", "R_hip"],
-    ["R_knee", "R_ankle"],
-    ["L_knee", "L_hip"],
-    ["L_knee", "L_ankle"],
-    ["R_elbow", "R_shoulder"],
-    ["R_elbow", "R_wrist"],
-    ["L_elbow", "L_shoulder"],
-    ["L_elbow", "L_wrist"],
-    ["neck", "S_tail"],
+    ["s_tail", "e_tail"],
+    ["s_tail", "l_hip"],
+    ["s_tail", "r_hip"],
+    ["r_knee", "r_hip"],
+    ["r_knee", "r_ankle"],
+    ["l_knee", "l_hip"],
+    ["l_knee", "l_ankle"],
+    ["r_elbow", "r_shoulder"],
+    ["r_elbow", "r_wrist"],
+    ["l_elbow", "l_shoulder"],
+    ["l_elbow", "l_wrist"],
+    ["neck", "s_tail"],
     ["neck", "head"],
     ["neck", "nose"],
-    ["neck", "L_shoulder"],
-    ["neck", "R_shoulder"],
-    ["neck", "L_ear"],
-    ["neck", "R_ear"],
-    ["nose", "L_eye"],
-    ["nose", "R_eye"],
-    ["nose", "L_ear"],
-    ["nose", "R_ear"],
-    ["head", "L_ear"],
-    ["head", "R_ear"],
-    ["head", "L_eye"],
-    ["head", "R_eye"],
+    ["neck", "l_shoulder"],
+    ["neck", "r_shoulder"],
+    ["neck", "l_ear"],
+    ["neck", "r_ear"],
+    ["nose", "l_eye"],
+    ["nose", "r_eye"],
+    ["nose", "l_ear"],
+    ["nose", "r_ear"],
+    ["head", "l_ear"],
+    ["head", "r_ear"],
+    ["head", "l_eye"],
+    ["head", "r_eye"],
 ]
 
-keypoints = {
+neckless_skeleton = [
+    ["s_tail", "e_tail"],
+    ["s_tail", "l_hip"],
+    ["s_tail", "r_hip"],
+    ["r_knee", "r_hip"],
+    ["r_knee", "r_ankle"],
+    ["l_knee", "l_hip"],
+    ["l_knee", "l_ankle"],
+    ["r_elbow", "r_shoulder"],
+    ["r_elbow", "r_wrist"],
+    ["l_elbow", "l_shoulder"],
+    ["l_elbow", "l_wrist"],
+    ["neck", "s_tail"],
+    ["neck", "l_shoulder"],
+    ["neck", "r_shoulder"],
+    ["nose", "l_eye"],
+    ["nose", "r_eye"],
+    ["nose", "l_ear"],
+    ["nose", "r_ear"],
+    ["head", "l_ear"],
+    ["head", "r_ear"],
+    ["head", "l_eye"],
+    ["head", "r_eye"],
+]
+
+keypoints_dict = {
     "gbyk": {
-        "E_tail": 0,
-        "L_ankle": 1,
-        "L_ear": 2,
-        "L_elbow": 3,
-        "L_eye": 4,
-        "L_hip": 5,
-        "L_knee": 6,
-        "L_shoulder": 7,
-        "L_wrist": 8,
-        "R_ankle": 9,
-        "R_ear": 10,
-        "R_elbow": 11,
-        "R_eye": 12,
-        "R_hip": 13,
-        "R_knee": 14,
-        "R_shoulder": 15,
-        "R_wrist": 16,
-        "S_tail": 17,
+        "e_tail": 0,
+        "l_ankle": 1,
+        "l_ear": 2,
+        "l_elbow": 3,
+        "l_eye": 4,
+        "l_hip": 5,
+        "l_knee": 6,
+        "l_shoulder": 7,
+        "l_wrist": 8,
+        "r_ankle": 9,
+        "r_ear": 10,
+        "r_elbow": 11,
+        "r_eye": 12,
+        "r_hip": 13,
+        "r_knee": 14,
+        "r_shoulder": 15,
+        "r_wrist": 16,
+        "s_tail": 17,
         "head": 18,
         "neck": 19,
         "nose": 20,
     },
     "old_gbyk": {
-        "L_wrist": 0,
-        "L_elbow": 1,
-        "L_shoulder": 2,
-        "R_wrist": 3,
-        "R_elbow": 4,
-        "R_shoulder": 5,
-        "L_ankle": 6,
-        "L_knee": 7,
-        "L_hip": 8,
-        "R_ankle": 9,
-        "R_knee": 10,
-        "R_hip": 11,
-        "E_tail": 12,
-        "S_tail": 13,
+        "l_wrist": 0,
+        "l_elbow": 1,
+        "l_shoulder": 2,
+        "r_wrist": 3,
+        "r_elbow": 4,
+        "r_shoulder": 5,
+        "l_ankle": 6,
+        "l_knee": 7,
+        "l_hip": 8,
+        "r_ankle": 9,
+        "r_knee": 10,
+        "r_hip": 11,
+        "e_tail": 12,
+        "s_tail": 13,
         "neck": 14,
         "head": 15,
-        "L_ear": 16,
-        "R_ear": 17,
-        "L_eye": 18,
-        "R_eye": 19,
+        "l_ear": 16,
+        "r_ear": 17,
+        "l_eye": 18,
+        "r_eye": 19,
         "nose": 20,
     },
     "pg": {
         "neck": 0,
         "spine": 1,
         "head": 2,
-        "L_ear": 3,
-        "R_ear": 4,
-        "L_eye": 5,
-        "R_eye": 6,
+        "l_ear": 3,
+        "r_ear": 4,
+        "l_eye": 5,
+        "r_eye": 6,
         "nose": 7,
-        "L_shoulder": 8,
-        "L_elbow": 9,
-        "L_wrist": 10,
-        "L_upperArm": 11,
-        "L_lowerArm": 12,
-        "R_shoulder": 13,
-        "R_elbow": 14,
-        "R_wrist": 15,
-        "R_upperArm": 16,
-        "R_lowerArm": 17,
-        "L_hip": 18,
-        "L_knee": 19,
-        "L_ankle": 20,
-        "L_upperLeg": 21,
-        "L_lowerLeg": 22,
-        "R_hip": 23,
-        "R_knee": 24,
-        "R_ankle": 25,
-        "R_upperLeg": 26,
-        "R_lowerLeg": 27,
-        "S_tail": 28,
-        "M_tail": 29,
-        "E_tail": 30,
+        "l_shoulder": 8,
+        "l_elbow": 9,
+        "l_wrist": 10,
+        "l_upperarm": 11,
+        "l_lowerarm": 12,
+        "r_shoulder": 13,
+        "r_elbow": 14,
+        "r_wrist": 15,
+        "r_upperarm": 16,
+        "r_lowerarm": 17,
+        "l_hip": 18,
+        "l_knee": 19,
+        "l_ankle": 20,
+        "l_upperleg": 21,
+        "l_lowerleg": 22,
+        "r_hip": 23,
+        "r_knee": 24,
+        "r_ankle": 25,
+        "r_upperleg": 26,
+        "r_lowerleg": 27,
+        "s_tail": 28,
+        "m_tail": 29,
+        "e_tail": 30,
     },
 }
 
-com_keypoints = {
+com_keypoints_idxs = {
+    experiment: [
+        keypoints_dict[experiment]["l_hip"],
+        keypoints_dict[experiment]["r_hip"],
+        keypoints_dict[experiment]["l_shoulder"],
+        keypoints_dict[experiment]["r_shoulder"],
+        keypoints_dict[experiment]["neck"],
+        keypoints_dict[experiment]["s_tail"],
+    ]
+    for experiment in ["gbyk", "pg"]
+}
+
+extra_keypoints_idxs = {
     "gbyk": [
-        keypoints["gbyk"]["L_hip"],
-        keypoints["gbyk"]["R_hip"],
-        keypoints["gbyk"]["L_shoulder"],
-        keypoints["gbyk"]["R_shoulder"],
-        keypoints["gbyk"]["neck"],
-        keypoints["gbyk"]["S_tail"],
+        keypoints_dict["gbyk"]["l_eye"],
+        keypoints_dict["gbyk"]["r_eye"],
+        keypoints_dict["gbyk"]["head"],
     ],
     "pg": [
-        keypoints["pg"]["L_hip"],
-        keypoints["pg"]["R_hip"],
-        keypoints["pg"]["L_shoulder"],
-        keypoints["pg"]["R_shoulder"],
-        keypoints["pg"]["neck"],
-        keypoints["pg"]["S_tail"],
+        keypoints_dict["pg"]["spine"],
+        keypoints_dict["pg"]["head"],
+        keypoints_dict["pg"]["l_eye"],
+        keypoints_dict["pg"]["r_eye"],
+        keypoints_dict["pg"]["l_upperarm"],
+        keypoints_dict["pg"]["l_lowerarm"],
+        keypoints_dict["pg"]["r_upperarm"],
+        keypoints_dict["pg"]["r_lowerarm"],
+        keypoints_dict["pg"]["l_upperleg"],
+        keypoints_dict["pg"]["l_lowerleg"],
+        keypoints_dict["pg"]["r_upperleg"],
+        keypoints_dict["pg"]["r_lowerleg"],
+        keypoints_dict["pg"]["m_tail"],
     ],
 }
 
-extra_keypoints = {
-    "gbyk": [
-        keypoints["gbyk"]["L_eye"],
-        keypoints["gbyk"]["R_eye"],
-        keypoints["gbyk"]["head"],
-    ],
-    "pg": [
-        keypoints["pg"]["spine"],
-        keypoints["pg"]["head"],
-        keypoints["pg"]["L_eye"],
-        keypoints["pg"]["R_eye"],
-        keypoints["pg"]["L_upperArm"],
-        keypoints["pg"]["L_lowerArm"],
-        keypoints["pg"]["R_upperArm"],
-        keypoints["pg"]["R_lowerArm"],
-        keypoints["pg"]["L_upperLeg"],
-        keypoints["pg"]["L_lowerLeg"],
-        keypoints["pg"]["R_upperLeg"],
-        keypoints["pg"]["R_lowerLeg"],
-        keypoints["pg"]["M_tail"],
-    ],
+joint_angles_idxs = {
+    ("l_hip", "l_knee", "l_ankle"): 0,
+    ("r_hip", "r_knee", "r_ankle"): 1,
+    ("l_shoulder", "l_elbow", "l_wrist"): 2,
+    ("r_shoulder", "r_elbow", "r_wrist"): 3,
 }
 
 
-def compute_speed(poses, experiment, speed_repr):
+def compute_speed(poses, representation, experiment):
     duration, n_3d_keypoints = poses.shape
 
-    if speed_repr == "kps_vec":
+    if representation == "kps_vec":
         speed = np.zeros_like(poses)
         speed[1:] = np.diff(poses, axis=0)
-    elif speed_repr == "com_vec":
+    elif representation == "com_vec":
         poses = poses.reshape(duration, n_3d_keypoints // 3, 3)
-        com = poses[:, com_keypoints[experiment]].mean(axis=1)
+        com = poses[:, com_keypoints_idxs[experiment]].mean(axis=1)
         speed = np.zeros_like(com)
         speed[1:] = np.diff(com, axis=0)
-    elif speed_repr == "kps_mag":
+    elif representation == "kps_mag":
         speed = np.zeros((duration, 1))
         speed[1:] = np.linalg.norm(
             np.diff(poses, axis=0), axis=1, keepdims=True
         )
-    elif speed_repr == "com_mag":
+    elif representation == "com_mag":
         poses = poses.reshape(duration, n_3d_keypoints // 3, 3)
-        com = poses[:, com_keypoints[experiment]].mean(axis=1)
+        com = poses[:, com_keypoints_idxs[experiment]].mean(axis=1)
         speed = np.zeros((com.shape[0], 1))
         speed[1:] = np.linalg.norm(np.diff(com, axis=0), axis=1, keepdims=True)
     else:
-        raise ValueError(f"unknown speed representation: {speed_repr}.")
+        raise ValueError(f"unknown speed representation: {representation}.")
 
     return speed
 
@@ -200,52 +222,155 @@ def compute_acceleration(speed):
 def compute_com(poses, experiment: str):
     duration, n_3d_keypoints = poses.shape
     poses = poses.reshape(duration, n_3d_keypoints // 3, 3)
-    com = poses[:, com_keypoints[experiment], :2].mean(axis=1)
+    com = poses[:, com_keypoints_idxs[experiment], :2].mean(axis=1)
     return com
 
 
-def change_repr(poses, experiment, body_repr):
-    # normalizing factor for the egocentric poses. it keeps the coordinates within a good numerical range.
-    norm_factor = 10
-
-    duration, n_3d_keypoints = poses.shape
-    new_poses = poses.reshape(duration, n_3d_keypoints // 3, 3).copy()
-    l_ear = new_poses[:, [keypoints[experiment]["L_ear"]]]
-    r_ear = new_poses[:, [keypoints[experiment]["R_ear"]]]
-    middle_head = 0.5 * (l_ear + r_ear)
-
-    if body_repr in {"allocentric", "centered"}:
-        new_poses -= np.tile(middle_head, (1, n_3d_keypoints // 3, 1))
-        new_poses = np.reshape(new_poses, (duration, n_3d_keypoints))
-        if body_repr == "allocentric":
-            middle_head = middle_head[:, 0, :].reshape(-1, 3)
-            new_poses = np.append(new_poses, middle_head, axis=1)
-    elif body_repr == "egocentric":
-        nose = new_poses[:, [keypoints[experiment]["nose"]]]
-        x_axis = norm_factor * (r_ear - middle_head).squeeze()
-        y_axis = norm_factor * (nose - middle_head).squeeze()
-        inner_product = np.sum(x_axis * y_axis, axis=1, keepdims=True)
-        y_axis = y_axis - inner_product * x_axis
-        z_axis = np.cross(x_axis, y_axis)
-        # change of basis matrices: from room coords to head-centered coords.
-        cob_matrices = np.linalg.pinv(
-            np.stack((x_axis, y_axis, z_axis), axis=2)
-        )
-        new_poses -= np.tile(middle_head, (1, n_3d_keypoints // 3, 1))
-        new_poses = np.einsum("nij,nkj->nki", cob_matrices, new_poses)
-        new_poses = np.reshape(new_poses, (duration, n_3d_keypoints))
+def change_representation(data, representation, experiment):
+    if representation == "allocentric":
+        new_poses = compute_allocentric(data, experiment)
+    elif representation == "centered":
+        new_poses = compute_centered(data, experiment)
+    elif representation == "egocentric":
+        new_poses = compute_egocentric(data, experiment)
+    elif representation == "distances":
+        new_poses = compute_distances(data, experiment)
+    elif representation == "angles":
+        new_poses = compute_angles(data, experiment)
+    elif representation == "trunk":
+        new_poses = compute_trunk(data, experiment)
     else:
-        raise ValueError(f"invalid body representation: {body_repr}.")
-
+        raise ValueError(f"invalid body representation: {representation}.")
     return new_poses
 
 
-def exclude_keypoints(poses, experiment, keypoints_to_exclude=None):
+def compute_trunk(data, experiment):
+    n_frames, n_3d_keypoints = data.shape
+    trunk_poses = data.reshape(n_frames, n_3d_keypoints // 3, 3).copy()
+
+    neck = trunk_poses[:, keypoints_dict[experiment]["neck"]]
+    s_tail = trunk_poses[:, keypoints_dict[experiment]["s_tail"]]
+    r_wrist = trunk_poses[:, keypoints_dict[experiment]["r_wrist"]]
+
+    trunk_poses = trunk_poses - neck[:, None, :]
+
+    x_axis = s_tail - neck
+    x_axis /= np.linalg.norm(x_axis, axis=-1, keepdims=True)
+
+    v = neck - r_wrist
+    z_axis = v - np.sum(v * x_axis, axis=-1, keepdims=True) * x_axis
+    z_axis /= np.linalg.norm(z_axis, axis=-1, keepdims=True)
+
+    y_axis = np.cross(x_axis, z_axis)
+
+    R = np.stack([x_axis, y_axis, z_axis], axis=-1)
+    R = np.transpose(R, (0, 2, 1))
+    trunk_poses = np.einsum("nij,nkj->nki", R, trunk_poses)
+    trunk_poses = trunk_poses.reshape(n_frames, n_3d_keypoints)
+
+    return trunk_poses
+
+
+def compute_distances(data, experiment):
+    n_frames, n_3d_keypoints = data.shape
+    data_copy = data.reshape(n_frames, n_3d_keypoints // 3, 3).copy()
+    dist_poses = np.empty((n_frames, len(neckless_skeleton)), dtype=np.float32)
+    dist_poses = np.stack(
+        [
+            np.linalg.norm(
+                data_copy[:, keypoints_dict[experiment][s]]
+                - data_copy[:, keypoints_dict[experiment][e]],
+                axis=1,
+            )
+            for s, e in neckless_skeleton
+        ],
+        axis=1,
+    )
+    return dist_poses
+
+
+def compute_centered(data, experiment):
+    n_frames, n_3d_keypoints = data.shape
+    centered_poses = data.reshape(n_frames, n_3d_keypoints // 3, 3).copy()
+
+    r_ear = centered_poses[:, [keypoints_dict[experiment]["r_ear"]]]
+    l_ear = centered_poses[:, [keypoints_dict[experiment]["l_ear"]]]
+    middle_head = 0.5 * (l_ear + r_ear)
+
+    centered_poses = centered_poses - middle_head
+    centered_poses = np.reshape(centered_poses, (n_frames, n_3d_keypoints))
+
+    return centered_poses
+
+
+def compute_allocentric(data, experiment):
+    n_frames, n_3d_keypoints = data.shape
+    allo_poses = data.reshape(n_frames, n_3d_keypoints // 3, 3).copy()
+
+    r_ear = allo_poses[:, [keypoints_dict[experiment]["r_ear"]]]
+    l_ear = allo_poses[:, [keypoints_dict[experiment]["l_ear"]]]
+    middle_head = 0.5 * (l_ear + r_ear)
+
+    allo_poses = allo_poses - middle_head
+    allo_poses = np.reshape(allo_poses, (n_frames, n_3d_keypoints))
+    middle_head = middle_head[:, 0, :].reshape(-1, 3)
+    allo_poses = np.append(allo_poses, middle_head, axis=1)
+
+    return allo_poses
+
+
+def compute_egocentric(data, experiment):
+    n_frames, n_3d_keypoints = data.shape
+    ego_poses = data.reshape(n_frames, n_3d_keypoints // 3, 3).copy()
+
+    r_ear = ego_poses[:, [keypoints_dict[experiment]["r_ear"]]]
+    l_ear = ego_poses[:, [keypoints_dict[experiment]["l_ear"]]]
+    nose = ego_poses[:, [keypoints_dict[experiment]["nose"]]]
+    middle_head = 0.5 * (l_ear + r_ear)
+
+    ego_poses = ego_poses - middle_head
+
+    norm_factor = 10
+    x_axis = norm_factor * (r_ear - middle_head).squeeze()
+    y_axis = norm_factor * (nose - middle_head).squeeze()
+
+    inner_product = np.sum(x_axis * y_axis, axis=1, keepdims=True)
+    y_axis = y_axis - inner_product * x_axis
+    z_axis = np.cross(x_axis, y_axis)
+
+    # change basis from room coords to head-centered coords.
+    basis = np.stack((x_axis, y_axis, z_axis), axis=2)
+    cob_matrices = np.linalg.inv(basis)
+    ego_poses = np.einsum("nij,nkj->nki", cob_matrices, ego_poses)
+
+    # for kp in ["head", "nose", "r_ear", "l_ear", "l_eye", "r_eye", "neck"]:
+    #     new_poses[:, keypoints_dict[experiment][kp]] = new_poses[
+    #         :, keypoints_dict[experiment][kp]
+    #     ].mean(axis=0)
+
+    ego_poses = np.reshape(ego_poses, (n_frames, n_3d_keypoints))
+
+    return ego_poses
+
+
+def exclude_keypoints(data, keypoints, experiment):
+    if not keypoints:
+        return data
+    indices = [keypoints_dict[experiment][kp] for kp in keypoints]
+    n_frames, n_3d_keypoints = data.shape
+    data = np.reshape(data, (n_frames, n_3d_keypoints // 3, 3))
+    data = np.delete(data, indices, axis=1)
+    data = np.reshape(data, (n_frames, -1))
+    return data
+
+
+def zero_keypoints(poses, keypoints, experiment):
+    if not keypoints:
+        return poses
+    indices = [keypoints_dict[experiment][kp] for kp in keypoints]
     duration, n_3d_keypoints = poses.shape
     poses = np.reshape(poses, (duration, n_3d_keypoints // 3, 3))
-    if keypoints_to_exclude is None:
-        keypoints_to_exclude = extra_keypoints[experiment]
-    poses = np.delete(poses, keypoints_to_exclude, axis=1)
+    poses[:, indices, :] = 0.0
     poses = np.reshape(poses, (duration, -1))
     return poses
 
@@ -259,112 +384,89 @@ def normalize_poses(poses, POSES_DIR):
     return 2 * (poses - min_coord) / (max_coord - min_coord) - 1
 
 
-def plot(
-    poses,
-    experiment,
-    save_path=None,
-    return_fig=False,
-    fps=20,
+def preprocess(
+    data, config, experiment="gbyk", intervals=None, pcs_to_exclude=None
 ):
-    """
-    Plot or animate 3D human pose(s) using a given skeleton structure.
+    """preprocess poses data before training the model.
 
-    Parameters:
-    - poses (ndarray): Array of shape (J, 3) or (T, J, 3) representing 3D joint positions.
-    - save_path (str, optional): If given and ends with .gif, saves output GIF here.
-    - return_fig (bool, optional): If True, returns list of Figures instead of displaying/saving.
-    - fps (int, optional): Frames per second for GIF export if `poses` is 3D.
-
-    Returns:
-    - matplotlib.figure.Figure, list of Figures, or None.
+    WARNING: the order of the functions matter.
+        - you CAN'T exclude the keypoints before changing the representation because the indices for the head keypoints are fixed and are used to change the representation, for example.
+        - excluding the keypoints AND projecting to PCA may lead to weird results.
+        - excluding
     """
 
-    def draw_pose(pose):
-        fig = plt.figure()
-        ax = fig.add_subplot(111, projection="3d")
+    if "representation" in config:
+        data = change_representation(
+            data,
+            config["representation"],
+            experiment,
+        )
 
-        for s, e in skeleton:
-            x = [
-                pose[keypoints[experiment][s], 0],
-                pose[keypoints[experiment][e], 0],
-            ]
-            y = [
-                pose[keypoints[experiment][s], 1],
-                pose[keypoints[experiment][e], 1],
-            ]
-            z = [
-                pose[keypoints[experiment][s], 2],
-                pose[keypoints[experiment][e], 2],
-            ]
-            ax.plot(x, y, z, color="blue")
+    if "keypoints_to_exclude" in config:
+        data = exclude_keypoints(
+            data,
+            config["keypoints_to_exclude"],
+            experiment,
+        )
 
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.set_zlabel("z")
-        ax.view_init(elev=15, azim=70)
-        ax.set_box_aspect([1, 1, 1])
-        ax.grid(False)
-        return fig, ax
+    if config.get("project_to_pca", False):
+        if intervals is None:
+            warnings.warn(
+                "intervals not provided, it'll do PCA on the entire session."
+            )
+        data = utils.project_to_pca(
+            data,
+            intervals,
+            config.get("divide_variance", False),
+        )[0]
 
-    duration, n_3d_keypoints = poses.shape
-    poses = np.atleast_3d(poses.reshape(duration, n_3d_keypoints // 3, 3))
-    figs = [draw_pose(pose) for pose in poses]
+    if pcs_to_exclude is not None:
+        data = np.delete(data, pcs_to_exclude, axis=1)
 
-    if return_fig:
-        return figs
-
-    if save_path and len(figs) > 1:
-        with GifMaker(save_path, fps=fps) as gif:
-            for fig in figs:
-                gif.add(fig)
-        return
-    elif save_path:
-        fig, ax = draw_pose(poses[0])
-        fig.savefig(save_path, bbox_inches="tight")
-        return
-
-    for fig, ax in figs:
-        update_fig(fig, ax)
+    return data
 
 
-def plot_com(DATA_DIR, sessions=None, ncols=3, homing=False, save_path=None):
-    DATA_DIR = Path(DATA_DIR)
-    if sessions is None:
-        sessions = [DATA_DIR.name]
-        DATA_DIR = DATA_DIR.parent
+def compute_elevation_angle(p1: np.ndarray, p2: np.ndarray) -> np.ndarray:
+    dz = p2[..., 2] - p1[..., 2]
+    dx = p2[..., 0] - p1[..., 0]
+    dy = p2[..., 1] - p1[..., 1]
+    horizontal_dist = np.sqrt(dx**2 + dy**2)
+    return np.arctan2(dz, horizontal_dist)
 
-    n_sessions = len(sessions)
-    ncols = min(ncols, n_sessions)
-    nrows = (n_sessions + ncols - 1) // ncols
 
-    fig, axs = plt.subplots(
-        nrows=nrows,
-        ncols=ncols,
-        figsize=(ncols * 3.5, nrows * 3.5),
-        sharex=True,
-        sharey=True,
-        squeeze=False,
-    )
-    axs = axs.flat
+def compute_joint_angle(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
+    v1_normalized = v1 / (np.linalg.norm(v1, axis=-1, keepdims=True) + 1e-8)
+    v2_normalized = v2 / (np.linalg.norm(v2, axis=-1, keepdims=True) + 1e-8)
+    dot = np.sum(v1_normalized * v2_normalized, axis=-1)
+    tmp = np.arccos(np.clip(dot, -1.0, 1.0))  # angle in radians
+    return tmp
 
-    for i, s in enumerate(sessions):
-        POSES_DIR = DATA_DIR / s / "poses"
-        poses = data.load_from_memmap(POSES_DIR)
-        poses = poses.reshape(-1, 21, 3)
-        com = poses[:, com_keypoints["gbyk"], :2].mean(axis=1)
 
-        TRIALS_DIR = DATA_DIR / s / "trials"
-        if homing:
-            intervals = utils.extract_homing_intervals(TRIALS_DIR)
-        else:
-            intervals = utils.extract_trials_intervals(TRIALS_DIR)
+def compute_angles(
+    poses: np.ndarray,
+    experiment: str,
+):
+    n_frames = poses.shape[0]
+    n_keypoints = len(keypoints_dict[experiment])
+    poses = poses.reshape(n_frames, n_keypoints, 3)
 
-        for start, end in intervals:
-            axs[i].plot(com[start:end, 0], com[start:end, 1], color="b")
-            axs[i].set_title(s)
+    joint_angles = []
+    for a, b, c in joint_angles_idxs:
+        pa = poses[:, keypoints_dict[experiment][a]]
+        pb = poses[:, keypoints_dict[experiment][b]]
+        pc = poses[:, keypoints_dict[experiment][c]]
+        v1 = pa - pb
+        v2 = pc - pb
+        ang = compute_joint_angle(v1, v2)
+        joint_angles.append(ang)
+    joint_angles = np.stack(joint_angles, axis=1)
 
-    if save_path:
-        plt.savefig(save_path, bbox_inches="tight", dpi=300)
+    elevation_angles = []
+    for a, b in skeleton:
+        p1 = poses[:, keypoints_dict[experiment][a]]
+        p2 = poses[:, keypoints_dict[experiment][b]]
+        elev = compute_elevation_angle(p1, p2)
+        elevation_angles.append(elev)
+    elevation_angles = np.stack(elevation_angles, axis=1)
 
-    plt.tight_layout()
-    plt.show()
+    return np.concatenate([joint_angles, elevation_angles], axis=1)
