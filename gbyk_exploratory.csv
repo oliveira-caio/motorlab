@@ -1,0 +1,13 @@
+session,homing L count,homing R count,precue L count,precue R count,gbyk L count,gbyk R count,homing L mistake,homing R mistake,precue L mistake,precue R mistake,gbyk L mistake,gbyk R mistake
+bex_20230621_spikes_sorted_SES,38,25,57,39,0,0,0,0,9,0,0,0
+bex_20230624_spikes_sorted_SES,40,33,58,50,0,0,0,0,5,2,0,0
+bex_20230629_spikes_sorted_SES,49,40,71,63,0,0,0,0,4,1,0,0
+bex_20230630_spikes_sorted_SES,49,33,68,64,0,0,0,0,5,4,0,0
+bex_20230701_spikes_sorted_SES,39,26,56,49,0,0,0,0,5,1,0,0
+bex_20230708_spikes_sorted_SES,40,38,0,0,55,51,0,0,0,0,4,2
+ken_20230618_spikes_sorted_SES,30,62,69,75,0,0,0,0,3,6,0,0
+ken_20230622_spikes_sorted_SES,35,44,28,32,33,34,0,0,2,4,0,0
+ken_20230629_spikes_sorted_SES,38,49,38,27,32,33,0,0,3,0,0,0
+ken_20230630_spikes_sorted_SES,60,74,0,0,81,80,0,0,0,0,0,0
+ken_20230701_spikes_sorted_SES,53,53,78,59,0,0,0,0,14,6,0,0
+ken_20230703_spikes_sorted_SES,84,90,0,0,104,101,0,0,0,0,1,0

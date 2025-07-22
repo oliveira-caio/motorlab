@@ -233,7 +233,7 @@ def poses3d(
         fig = plt.figure()
         ax = fig.add_subplot(111, projection="3d")
 
-        for s, e in poses.skeleton:
+        for s, e in poses.SKELETON:
             x = [
                 pose[poses.keypoints_dict[experiment][s], 0],
                 pose[poses.keypoints_dict[experiment][e], 0],

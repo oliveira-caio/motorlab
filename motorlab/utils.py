@@ -9,11 +9,230 @@ from motorlab.intervals import LabeledInterval
 
 
 if torch.cuda.is_available():
-    device = torch.device("cuda")
+    DEVICE = torch.device("cuda")
 elif torch.backends.mps.is_available():
-    device = torch.device("mps")
+    DEVICE = torch.device("mps")
 else:
-    device = torch.device("cpu")
+    DEVICE = torch.device("cpu")
+
+
+KEYPOINTS = {
+    "gbyk": {
+        "e_tail": 0,
+        "l_ankle": 1,
+        "l_ear": 2,
+        "l_elbow": 3,
+        "l_eye": 4,
+        "l_hip": 5,
+        "l_knee": 6,
+        "l_shoulder": 7,
+        "l_wrist": 8,
+        "r_ankle": 9,
+        "r_ear": 10,
+        "r_elbow": 11,
+        "r_eye": 12,
+        "r_hip": 13,
+        "r_knee": 14,
+        "r_shoulder": 15,
+        "r_wrist": 16,
+        "s_tail": 17,
+        "head": 18,
+        "neck": 19,
+        "nose": 20,
+    },
+    "old_gbyk": {
+        "l_wrist": 0,
+        "l_elbow": 1,
+        "l_shoulder": 2,
+        "r_wrist": 3,
+        "r_elbow": 4,
+        "r_shoulder": 5,
+        "l_ankle": 6,
+        "l_knee": 7,
+        "l_hip": 8,
+        "r_ankle": 9,
+        "r_knee": 10,
+        "r_hip": 11,
+        "e_tail": 12,
+        "s_tail": 13,
+        "neck": 14,
+        "head": 15,
+        "l_ear": 16,
+        "r_ear": 17,
+        "l_eye": 18,
+        "r_eye": 19,
+        "nose": 20,
+    },
+    "pg": {
+        "neck": 0,
+        "spine": 1,
+        "head": 2,
+        "l_ear": 3,
+        "r_ear": 4,
+        "l_eye": 5,
+        "r_eye": 6,
+        "nose": 7,
+        "l_shoulder": 8,
+        "l_elbow": 9,
+        "l_wrist": 10,
+        "l_upperarm": 11,
+        "l_lowerarm": 12,
+        "r_shoulder": 13,
+        "r_elbow": 14,
+        "r_wrist": 15,
+        "r_upperarm": 16,
+        "r_lowerarm": 17,
+        "l_hip": 18,
+        "l_knee": 19,
+        "l_ankle": 20,
+        "l_upperleg": 21,
+        "l_lowerleg": 22,
+        "r_hip": 23,
+        "r_knee": 24,
+        "r_ankle": 25,
+        "r_upperleg": 26,
+        "r_lowerleg": 27,
+        "s_tail": 28,
+        "m_tail": 29,
+        "e_tail": 30,
+    },
+}
+
+
+COM_KEYPOINTS_IDXS = {
+    experiment: [
+        KEYPOINTS[experiment]["l_hip"],
+        KEYPOINTS[experiment]["r_hip"],
+        KEYPOINTS[experiment]["l_shoulder"],
+        KEYPOINTS[experiment]["r_shoulder"],
+        KEYPOINTS[experiment]["neck"],
+        KEYPOINTS[experiment]["s_tail"],
+    ]
+    for experiment in ["gbyk", "pg"]
+}
+
+EXTRA_KEYPOINTS_IDXS = {
+    "gbyk": [
+        KEYPOINTS["gbyk"]["l_eye"],
+        KEYPOINTS["gbyk"]["r_eye"],
+        KEYPOINTS["gbyk"]["head"],
+    ],
+    "pg": [
+        KEYPOINTS["pg"]["spine"],
+        KEYPOINTS["pg"]["head"],
+        KEYPOINTS["pg"]["l_eye"],
+        KEYPOINTS["pg"]["r_eye"],
+        KEYPOINTS["pg"]["l_upperarm"],
+        KEYPOINTS["pg"]["l_lowerarm"],
+        KEYPOINTS["pg"]["r_upperarm"],
+        KEYPOINTS["pg"]["r_lowerarm"],
+        KEYPOINTS["pg"]["l_upperleg"],
+        KEYPOINTS["pg"]["l_lowerleg"],
+        KEYPOINTS["pg"]["r_upperleg"],
+        KEYPOINTS["pg"]["r_lowerleg"],
+        KEYPOINTS["pg"]["m_tail"],
+    ],
+}
+
+SKELETON = {
+    "normal": [
+        ["S_tail", "E_tail"],
+        ["S_tail", "L_hip"],
+        ["S_tail", "R_hip"],
+        ["R_knee", "R_hip"],
+        ["R_knee", "R_ankle"],
+        ["L_knee", "L_hip"],
+        ["L_knee", "L_ankle"],
+        ["R_elbow", "R_shoulder"],
+        ["R_elbow", "R_wrist"],
+        ["L_elbow", "L_shoulder"],
+        ["L_elbow", "L_wrist"],
+        ["neck", "S_tail"],
+        ["neck", "head"],
+        ["neck", "nose"],
+        ["neck", "L_shoulder"],
+        ["neck", "R_shoulder"],
+        ["neck", "L_ear"],
+        ["neck", "R_ear"],
+        ["nose", "L_eye"],
+        ["nose", "R_eye"],
+        ["nose", "L_ear"],
+        ["nose", "R_ear"],
+        ["head", "L_ear"],
+        ["head", "R_ear"],
+        ["head", "L_eye"],
+        ["head", "R_eye"],
+    ],
+    "reduced": [
+        ["S_tail", "E_tail"],
+        ["S_tail", "L_hip"],
+        ["S_tail", "R_hip"],
+        ["R_knee", "R_hip"],
+        ["R_knee", "R_ankle"],
+        ["L_knee", "L_hip"],
+        ["L_knee", "L_ankle"],
+        ["R_elbow", "R_shoulder"],
+        ["R_elbow", "R_wrist"],
+        ["L_elbow", "L_shoulder"],
+        ["L_elbow", "L_wrist"],
+        ["neck", "S_tail"],
+        ["neck", "nose"],
+        ["neck", "L_shoulder"],
+        ["neck", "R_shoulder"],
+        ["neck", "L_ear"],
+        ["neck", "R_ear"],
+        ["nose", "L_ear"],
+        ["nose", "R_ear"],
+    ],
+    "extended": [
+        ["M_tail", "E_tail"],
+        ["M_tail", "S_tail"],
+        ["S_tail", "spine"],
+        ["S_tail", "L_hip"],
+        ["S_tail", "R_hip"],
+        ["R_upperLeg", "R_hip"],
+        ["R_upperLeg", "R_knee"],
+        ["R_lowerLeg", "R_knee"],
+        ["R_lowerLeg", "R_ankle"],
+        ["L_upperLeg", "L_hip"],
+        ["L_upperLeg", "L_knee"],
+        ["L_lowerLeg", "L_knee"],
+        ["L_lowerLeg", "L_ankle"],
+        ["R_upperArm", "R_shoulder"],
+        ["R_upperArm", "R_elbow"],
+        ["R_lowerArm", "R_elbow"],
+        ["R_lowerArm", "R_wrist"],
+        ["L_upperArm", "L_shoulder"],
+        ["L_upperArm", "L_elbow"],
+        ["L_lowerArm", "L_elbow"],
+        ["L_lowerArm", "L_wrist"],
+        ["neck", "spine"],
+        ["neck", "head"],
+        ["neck", "nose"],
+        ["neck", "L_shoulder"],
+        ["neck", "R_shoulder"],
+        ["neck", "L_ear"],
+        ["neck", "R_ear"],
+        ["nose", "L_eye"],
+        ["nose", "R_eye"],
+        ["nose", "L_ear"],
+        ["nose", "R_ear"],
+        ["head", "L_ear"],
+        ["head", "R_ear"],
+        ["head", "L_eye"],
+        ["head", "R_eye"],
+    ],
+}
+
+
+def get_neckless_skeleton():
+    remove_edges = [
+        ["neck", "head"],
+        ["neck", "nose"],
+        ["neck", "l_ear"],
+        ["neck", "r_ear"],
+    ]
+    return [edge for edge in SKELETON if edge not in remove_edges]
 
 
 def compute_tile_distribution(tiles, intervals=None):
@@ -47,11 +266,11 @@ def compute_weights(tiles, intervals):
     tile_distr = compute_tile_distribution(tiles, intervals)
     weights = torch.tensor(
         np.where(tile_distr > 0.0, 1.0 - tile_distr, 0.0), dtype=torch.float32
-    ).to(device)
+    ).to(DEVICE)
     return weights
 
 
-def fix_seed(seed):
+def fix_seed(seed: int = 0) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)

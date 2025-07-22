@@ -80,7 +80,7 @@ def iterate_entire_trials(model, dataloaders, seq_length, metric=None):
     with torch.set_grad_enabled(False):
         for session in dataloaders:
             for x_trial, y_trial in dataloaders[session]:
-                x_trial = x_trial.to(utils.device)
+                x_trial = x_trial.to(utils.DEVICE)
                 pred = torch.cat(
                     [
                         model(x, session)
@@ -125,7 +125,7 @@ def iterate(
     with torch.set_grad_enabled(is_train):
         for session in dataloaders:
             for x_trial, y_trial in dataloaders[session]:
-                x_trial = x_trial.to(utils.device)
+                x_trial = x_trial.to(utils.DEVICE)
                 pred = model(x_trial, session)
                 gts[session].append(y_trial.detach().cpu().numpy())
                 preds[session].append(pred.detach().cpu().numpy())
@@ -272,7 +272,7 @@ def load(config, is_train):
     if is_train:
         print(model)
 
-    model.to(utils.device)
+    model.to(utils.DEVICE)
     return model
 
 
