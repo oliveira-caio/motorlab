@@ -7,11 +7,22 @@ import torch
 import wandb
 import yaml
 
-
-from . import data, datasets, intervals, metrics, modules, utils
+from motorlab import data, datasets, intervals, metrics, modules, utils
 
 
 def track(metrics, config, model):
+    """
+    Track and log metrics during training or evaluation.
+
+    Parameters
+    ----------
+    metrics : dict
+        Dictionary of metric names and values.
+    config : dict
+        Configuration dictionary.
+    model : torch.nn.Module
+        Model being trained or evaluated.
+    """
     if config["track"].get("metrics", False):
         print(format_metrics(metrics))
     if config["track"].get("wandb", False):
@@ -26,6 +37,19 @@ def track(metrics, config, model):
 
 
 def format_metrics(metrics):
+    """
+    Format metrics for printing/logging.
+
+    Parameters
+    ----------
+    metrics : dict
+        Dictionary of metric names and values.
+
+    Returns
+    -------
+    str
+        Formatted string of metrics.
+    """
     formatted = []
     for key, value in metrics.items():
         if "loss" in key or "mse" in key:
@@ -42,7 +66,19 @@ def format_metrics(metrics):
     return " | ".join(reversed(formatted))
 
 
-def dump_model_outputs(stacked_gts, stacked_preds, label):
+def dump_outputs(stacked_gts, stacked_preds, label):
+    """
+    Save model ground truths and predictions as .npy files for each session.
+
+    Parameters
+    ----------
+    stacked_gts : dict
+        Ground truth arrays by session.
+    stacked_preds : dict
+        Prediction arrays by session.
+    label : str
+        Label prefix for saved files.
+    """
     import os
 
     dump_dir = "dump/"
@@ -58,7 +94,20 @@ def dump_model_outputs(stacked_gts, stacked_preds, label):
         )
 
 
-def model_mean(model):
+def compute_mean(model: torch.nn.Module) -> float:
+    """
+    Compute the mean value of all trainable parameters (excluding biases) in a model.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Model to compute mean parameter value for.
+
+    Returns
+    -------
+    float
+        Mean value of trainable parameters.
+    """
     mean_val = torch.mean(
         torch.cat(
             [
@@ -71,7 +120,31 @@ def model_mean(model):
     return mean_val.item()
 
 
-def iterate_entire_trials(model, dataloaders, seq_length, metric=None):
+def iterate_entire_trials(
+    model: torch.nn.Module,
+    dataloaders: dict,
+    seq_length: int,
+    metric: str | None = None,
+):
+    """
+    Run model on entire trials and collect predictions and ground truths.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Model to evaluate.
+    dataloaders : dict
+        Dataloaders for each session.
+    seq_length : int
+        Sequence length for splitting trials.
+    metric : str, optional
+        Metric to compute. Default is None.
+
+    Returns
+    -------
+    tuple
+        (track_metrics, gts, preds)
+    """
     model.eval()
     gts = {session: [] for session in dataloaders}
     preds = {session: [] for session in dataloaders}
@@ -109,13 +182,36 @@ def iterate_entire_trials(model, dataloaders, seq_length, metric=None):
 
 
 def iterate(
-    model,
-    dataloaders,
-    loss_fns,
-    optimizer,
-    metric=None,
-    is_train=False,
-):
+    model: torch.nn.Module,
+    dataloaders: dict,
+    loss_fns: dict,
+    optimizer: torch.optim.Optimizer | None = None,
+    metric: str | None = None,
+    is_train: bool = False,
+) -> tuple[dict, dict, dict]:
+    """
+    Iterate over dataloaders for training or evaluation.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Model to train or evaluate.
+    dataloaders : dict
+        Dataloaders for each session.
+    loss_fns : dict
+        Loss functions for each session.
+    optimizer : torch.optim.Optimizer, optional
+        Optimizer for training. Default is None.
+    metric : str, optional
+        Metric to compute. Default is None.
+    is_train : bool, optional
+        Whether to run in training mode. Default is False.
+
+    Returns
+    -------
+    tuple
+        (track_metrics, stacked_gts, stacked_preds)
+    """
     model.train() if is_train else model.eval()
     gts = {session: [] for session in dataloaders}
     preds = {session: [] for session in dataloaders}
@@ -130,7 +226,7 @@ def iterate(
                 gts[session].append(y_trial.detach().cpu().numpy())
                 preds[session].append(pred.detach().cpu().numpy())
 
-                if is_train:
+                if is_train and optimizer is not None:
                     optimizer.zero_grad()
                     loss = loss_fns[session](pred, y_trial)
                     loss.backward()
@@ -163,14 +259,34 @@ def iterate(
 
 
 def loop(
-    model,
-    train_dataloaders,
-    valid_dataloaders,
-    loss_fns,
-    optimizer,
-    scheduler,
-    config,
-):
+    model: torch.nn.Module,
+    train_dataloaders: dict,
+    valid_dataloaders: dict,
+    loss_fns: dict,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.StepLR,
+    config: dict,
+) -> None:
+    """
+    Main training loop for model.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Model to train.
+    train_dataloaders : dict
+        Training dataloaders for each session.
+    valid_dataloaders : dict
+        Validation dataloaders for each session.
+    loss_fns : dict
+        Loss functions for each session.
+    optimizer : torch.optim.Optimizer
+        Optimizer for training.
+    scheduler : torch.optim.lr_scheduler._LRScheduler
+        Learning rate scheduler.
+    config : dict
+        Configuration dictionary.
+    """
     valid_metrics, _, _ = iterate(
         model,
         valid_dataloaders,
@@ -212,13 +328,56 @@ def loop(
             break
 
 
-def load(config, is_train):
-    if config["model"]["architecture"] == "gru":
-        model = modules.GRUModel(config)
-    elif config["model"]["architecture"] == "fc":
-        model = modules.FCModel(config)
-    elif config["model"]["architecture"] == "linreg":
-        model = modules.LinRegModel(config)
+def load(config: dict, is_train: bool) -> torch.nn.Module:
+    """
+    Load a model from config and optionally load weights from checkpoint.
+
+    Parameters
+    ----------
+    config : dict
+        Configuration dictionary.
+    is_train : bool
+        Whether to load for training (prints model).
+
+    Returns
+    -------
+    torch.nn.Module
+        Loaded model.
+    """
+    arch = config["model"]["architecture"]
+    # model_args = dict(
+    #     sessions=config["sessions"],
+    #     in_dim=config["model"]["in_dim"],
+    #     out_dim=config["model"]["out_dim"],
+    # )
+    if arch == "gru":
+        model = modules.GRUModel(
+            sessions=config["sessions"],
+            in_dim=config["model"]["in_dim"],
+            embedding_dim=config["model"]["embedding_dim"],
+            hidden_dim=config["model"]["hidden_dim"],
+            out_dim=config["model"]["out_dim"],
+            n_layers=config["model"].get("n_layers", 1),
+            dropout=config["model"].get("dropout", 0.0),
+            bidirectional=config["model"].get("bidirectional", True),
+            readout_type=config["model"].get("readout", "linear"),
+        )
+    elif arch == "fc":
+        model = modules.FCModel(
+            sessions=config["sessions"],
+            in_dim=config["model"]["in_dim"],
+            embedding_dim=config["model"]["embedding_dim"],
+            hidden_dim=config["model"]["hidden_dim"],
+            out_dim=config["model"]["out_dim"],
+            n_layers=config["model"].get("n_layers", 1),
+            readout_type=config["model"].get("readout", "linear"),
+        )
+    elif arch == "linreg":
+        model = modules.LinRegModel(
+            sessions=config["sessions"],
+            in_dim=config["model"]["in_dim"],
+            out_dim=config["model"]["out_dim"],
+        )
     else:
         raise ValueError(
             f"architecture not implemented: {config['architecture']}."
@@ -262,12 +421,12 @@ def load(config, is_train):
         }
         model.load_state_dict(filtered_state_dict, strict=False)
 
-        # todo: to make this more flexible, create a list of modules to freeze, loop over this list and freeze only the params of the listed modules.
-        for param in model.embedding.parameters():
-            param.requires_grad = False
-
-        for param in model.core.parameters():
-            param.requires_grad = False
+        modules_to_freeze = config.get("freeze_modules", ["embedding", "core"])
+        for module_name in modules_to_freeze:
+            module = getattr(model, module_name, None)
+            if module is not None and hasattr(module, "parameters"):
+                for param in module.parameters():
+                    param.requires_grad = False
 
     if is_train:
         print(model)
@@ -277,6 +436,19 @@ def load(config, is_train):
 
 
 def create_loss_fns(config):
+    """
+    Create loss functions for each session.
+
+    Parameters
+    ----------
+    config : dict
+        Configuration dictionary.
+
+    Returns
+    -------
+    dict
+        Dictionary mapping session to loss function.
+    """
     return {
         session: modules.losses_map(config["loss_fn"])
         for session in config["sessions"]
@@ -284,6 +456,14 @@ def create_loss_fns(config):
 
 
 def save_config(config):
+    """
+    Save configuration dictionary to a YAML file.
+
+    Parameters
+    ----------
+    config : dict
+        Configuration dictionary.
+    """
     CONFIG_DIR = Path(
         config["CONFIG_SAVE_DIR"]
         if "CONFIG_SAVE_DIR" in config
@@ -296,6 +476,18 @@ def save_config(config):
 
 
 def save_checkpoint(model, config, epoch=None):
+    """
+    Save model checkpoint to disk.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Model to save.
+    config : dict
+        Configuration dictionary.
+    epoch : int, optional
+        Epoch number for checkpoint filename. Default is None.
+    """
     CHECKPOINT_DIR = Path(
         config["CHECKPOINT_SAVE_DIR"]
         if "CHECKPOINT_SAVE_DIR" in config
@@ -308,6 +500,23 @@ def save_checkpoint(model, config, epoch=None):
 
 
 def setup(config, train_intervals, is_train):
+    """
+    Set up model, data, and loss functions for training or evaluation.
+
+    Parameters
+    ----------
+    config : dict
+        Configuration dictionary.
+    train_intervals : dict
+        Training intervals for each session.
+    is_train : bool
+        Whether setup is for training.
+
+    Returns
+    -------
+    tuple
+        (model, data_dict, loss_fns)
+    """
     utils.fix_seed(config.get("seed", 0))
     in_modalities = utils.list_modalities(config["in_modalities"])
     out_modalities = utils.list_modalities(config["out_modalities"])
@@ -348,6 +557,14 @@ def setup(config, train_intervals, is_train):
 
 
 def train(config):
+    """
+    Train a model using the provided configuration.
+
+    Parameters
+    ----------
+    config : dict
+        Configuration dictionary.
+    """
     _, train_intervals, valid_intervals = intervals.get_tiers_intervals(
         data_dir=config["DATA_DIR"],
         sessions=config["sessions"],
@@ -417,6 +634,19 @@ def train(config):
 
 
 def evaluate(config):
+    """
+    Evaluate a model using the provided configuration.
+
+    Parameters
+    ----------
+    config : dict
+        Configuration dictionary.
+
+    Returns
+    -------
+    tuple
+        (metrics, gts, preds)
+    """
     test_intervals, train_intervals, _ = intervals.get_tiers_intervals(
         data_dir=config["DATA_DIR"],
         sessions=config["sessions"],

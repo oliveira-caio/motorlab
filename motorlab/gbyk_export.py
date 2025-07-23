@@ -247,7 +247,7 @@ def intervals(session_dir: Path | str, threshold: int = 60000) -> None:
 
     trials_info = _load_and_filter_trials(data_dir / f"{session_name}.csv")
     trials_info = _process_reward(trials_info)
-    trials_info = _create_homing_intervals(trials_info)
+    trials_info = _create_homing_intervals(trials_info, threshold=threshold)
     trials_info = _assign_cue_time(trials_info)
     trials_info = _assign_tiers(trials_info)
 
@@ -270,42 +270,53 @@ def intervals(session_dir: Path | str, threshold: int = 60000) -> None:
             yaml.dump(data, f)
 
 
-def spikes(session_dir: Path | str) -> None:
-    """Extract and save spike data from HDF5 file to memory-mapped format.
+def spikes(session_dir: Path | str, sampling_rate: int = 20) -> None:
+    """Extract and save spike data and spike count data from HDF5 file.
 
-    This function reads neural spike data from a MATLAB (.mat) file,
-    converts it to a memory-mapped format for efficient access, and
-    saves associated metadata including brain area information.
+    This function reads neural spike data from a MATLAB (.mat) file once,
+    converts it to a memory-mapped format for efficient access, and creates
+    both the raw spikes data and binned spike count data. This avoids loading
+    the large spike data twice.
 
     Args:
         session_dir: Path to the session directory where spike data will be saved
+        sampling_rate: Target sampling rate for spike counts (default: 20Hz)
 
     Returns:
         None
     """
     session_dir = Path(session_dir)
     data_dir = session_dir.parent
+
     spikes_dir = session_dir / "spikes"
     spikes_dir.mkdir(exist_ok=True, parents=True)
 
-    meta_dir = spikes_dir / "meta"
-    meta_dir.mkdir(exist_ok=True, parents=True)
+    spike_count_dir = session_dir / "spike_count"
+    spike_count_dir.mkdir(exist_ok=True, parents=True)
+
+    spikes_meta_dir = spikes_dir / "meta"
+    spikes_meta_dir.mkdir(exist_ok=True, parents=True)
+
+    spike_count_meta_dir = spike_count_dir / "meta"
+    spike_count_meta_dir.mkdir(exist_ok=True, parents=True)
 
     filename = session_dir.name
     dataset = h5py.File(f"{data_dir}/{filename}.mat")
 
     ### spikes
     spikes = np.array(dataset["spikes"]["session"][:])
-    mmap = np.memmap(
+
+    ### save raw spike training
+    spikes_mmap = np.memmap(
         spikes_dir / "data.mem",
         dtype="float32",
         mode="w+",
         shape=spikes.shape,
     )
-    mmap[:] = spikes[:]
-    mmap.flush()
+    spikes_mmap[:] = spikes[:]
+    spikes_mmap.flush()
 
-    ### meta
+    ### save spikes metadata
     with open(spikes_dir / "meta.yml", "w") as f:
         meta = {
             "dtype": "float32",
@@ -319,7 +330,8 @@ def spikes(session_dir: Path | str) -> None:
         }
         yaml.dump(meta, f)
 
-    with open(meta_dir / "areas.npy", "wb") as f:
+    ### save brain areas data
+    with open(spikes_meta_dir / "areas.npy", "wb") as f:
         areas = np.array(
             extract_strings(dataset["spikes"]["array_labels"], dataset)
         )
@@ -330,52 +342,24 @@ def spikes(session_dir: Path | str) -> None:
         f"{len(array_code)}, {spikes.shape[-1]}"
     )
 
-
-def spike_count(session_dir: Path | str, sampling_rate: int = 20) -> None:
-    """Convert spike data to spike count data with specified sampling rate.
-
-    This function reads spike timing data and converts it to spike counts
-    within time bins. The default converts from 1000Hz spike data to 20Hz
-    spike count data (50ms bins).
-
-    Args:
-        session_dir: Path to the session directory containing spike data
-        sampling_rate: Target sampling rate for spike counts (default: 20Hz)
-
-    Returns:
-        None
-    """
-    session_dir = Path(session_dir)
-    spike_count_dir = session_dir / "spike_count"
-    spike_count_dir.mkdir(exist_ok=True, parents=True)
-    meta_dir = spike_count_dir / "meta"
-    meta_dir.mkdir(exist_ok=True, parents=True)
-    spikes_dir = session_dir / "spikes"
+    ### create spike count data from loaded spikes
     period = int(1000 / sampling_rate)
-
-    with open(spikes_dir / "meta.yml", "r") as f:
-        meta = yaml.safe_load(f)
-        spikes = np.memmap(
-            spikes_dir / "data.mem",
-            dtype=meta["dtype"],
-            mode="r",
-            shape=(meta["n_timestamps"], meta["n_signals"]),
-        )
-
     duration = len(spikes) - (len(spikes) % period)
     spike_count = (
         spikes[:duration].reshape(len(spikes) // period, period, -1).sum(axis=1)
     )
 
-    mmap = np.memmap(
+    ### Save spike count data
+    spike_count_mmap = np.memmap(
         spike_count_dir / "data.mem",
         dtype="float32",
         mode="w+",
         shape=spike_count.shape,
     )
-    mmap[:] = spike_count[:]
-    mmap.flush()
+    spike_count_mmap[:] = spike_count[:]
+    spike_count_mmap.flush()
 
+    ### save spike count metadata
     with open(spike_count_dir / "meta.yml", "w") as f:
         meta = {
             "dtype": "float32",
@@ -389,7 +373,8 @@ def spike_count(session_dir: Path | str, sampling_rate: int = 20) -> None:
         }
         yaml.dump(meta, f)
 
-    shutil.copytree(spikes_dir / "meta", meta_dir, dirs_exist_ok=True)
+    ### copy brain areas metadata to spike count directory
+    shutil.copytree(spikes_meta_dir, spike_count_meta_dir, dirs_exist_ok=True)
 
 
 def poses(session_dir: Path | str, old_format: bool = False) -> None:

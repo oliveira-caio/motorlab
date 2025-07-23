@@ -5,8 +5,6 @@ import torch
 
 from sklearn.decomposition import PCA
 
-from motorlab.intervals import LabeledInterval
-
 
 if torch.cuda.is_available():
     DEVICE = torch.device("cuda")
@@ -224,8 +222,36 @@ SKELETON = {
     ],
 }
 
+# todo: fix this
+JOINT_ANGLES_IDXS = {
+    "gbyk": [
+        ["l_shoulder", "neck", "l_elbow"],
+        ["r_shoulder", "neck", "r_elbow"],
+        ["l_hip", "s_tail", "l_knee"],
+        ["r_hip", "s_tail", "r_knee"],
+        ["l_elbow", "l_wrist", "l_hand"],
+        ["r_elbow", "r_wrist", "r_hand"],
+    ],
+    "pg": [
+        ["l_shoulder", "neck", "l_elbow"],
+        ["r_shoulder", "neck", "r_elbow"],
+        ["l_hip", "s_tail", "l_knee"],
+        ["r_hip", "s_tail", "r_knee"],
+        ["l_elbow", "l_wrist", "l_hand"],
+        ["r_elbow", "r_wrist", "r_hand"],
+    ],
+}
+
 
 def get_neckless_skeleton():
+    """
+    Return the skeleton with neck connections to head, nose, and ears removed.
+
+    Returns
+    -------
+    list
+        Skeleton edges with specified neck connections removed.
+    """
     remove_edges = [
         ["neck", "head"],
         ["neck", "nose"],
@@ -236,15 +262,48 @@ def get_neckless_skeleton():
 
 
 def compute_tile_distribution(tiles, intervals=None):
-    n_of_tiles = 15
+    """
+    Compute the normalized distribution of tile values.
+
+    Parameters
+    ----------
+    tiles : np.ndarray
+        Array of tile indices.
+    intervals : list, optional
+        List of (start, end) intervals to select tiles. Default is None.
+
+    Returns
+    -------
+    np.ndarray
+        Normalized distribution of tile values.
+    """
+    n_tiles = 15
     if intervals:
         tiles = np.concatenate([tiles[s:e] for s, e in intervals])
-    counts = np.array([(tiles == t).sum() for t in range(n_of_tiles)])
+    counts = np.array([(tiles == t).sum() for t in range(n_tiles)])
     distr = counts / counts.sum()
     return distr
 
 
 def list_modalities(modalities):
+    """
+    Return a list of modalities based on the input string.
+
+    Parameters
+    ----------
+    modalities : str
+        Modality type or 'all'.
+
+    Returns
+    -------
+    list
+        List of modality strings.
+
+    Raises
+    ------
+    ValueError
+        If an unknown modality is provided.
+    """
     if modalities == "all":
         return ["poses", "speed", "acceleration", "spike_count"]
     elif modalities == "spike_count":
@@ -261,16 +320,15 @@ def list_modalities(modalities):
         raise ValueError(f"unknown modalities: {modalities}.")
 
 
-def compute_weights(tiles, intervals):
-    # i'm using the poses and the valid intervals instead of the tiles itself because the distribution will probably change considerably when we compare the full session and only the valid time points.
-    tile_distr = compute_tile_distribution(tiles, intervals)
-    weights = torch.tensor(
-        np.where(tile_distr > 0.0, 1.0 - tile_distr, 0.0), dtype=torch.float32
-    ).to(DEVICE)
-    return weights
-
-
 def fix_seed(seed: int = 0) -> None:
+    """
+    Fix random seed for reproducibility across random, numpy, and torch.
+
+    Parameters
+    ----------
+    seed : int, optional
+        Random seed value. Default is 0.
+    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -282,21 +340,28 @@ def fix_seed(seed: int = 0) -> None:
 
 
 def count_params(model):
-    # Core
-    core_params = sum(p.numel() for p in model.core.parameters())
+    """
+    Count the number of parameters in the model core, embedding, and readout.
 
-    # Embedding per session
+    Parameters
+    ----------
+    model : object
+        Model object with core, embedding, and readout attributes.
+
+    Returns
+    -------
+    dict
+        Number of parameters for 'core', 'embedding', and 'readout'.
+    """
+    core_params = sum(p.numel() for p in model.core.parameters())
     embedding_params = sum(
         sum(p.numel() for p in v.parameters())
         for v in model.embedding.linear.values()
     )
-
-    # Readout per session
     readout_params = sum(
         sum(p.numel() for p in v.parameters())
         for v in model.readout.linear.values()
     )
-
     return {
         "core": core_params,
         "embedding": embedding_params,
@@ -305,13 +370,22 @@ def count_params(model):
 
 
 def params_per_session(model):
-    # Core (shared across sessions)
-    core_param_count = sum(p.numel() for p in model.core.parameters())
+    """
+    Compute the percentage and total number of parameters per session.
 
-    # Embedding and readout per session
+    Parameters
+    ----------
+    model : object
+        Model object with core, embedding, and readout attributes.
+
+    Returns
+    -------
+    dict
+        For each session, percentage and total number of parameters for embedding, core, and readout.
+    """
+    core_param_count = sum(p.numel() for p in model.core.parameters())
     session_names = model.embedding.linear.keys()
     result = {}
-
     for session in session_names:
         emb_count = sum(
             p.numel() for p in model.embedding.linear[session].parameters()
@@ -320,31 +394,40 @@ def params_per_session(model):
             p.numel() for p in model.readout.linear[session].parameters()
         )
         total = emb_count + core_param_count + read_count
-
         result[session] = {
             "embedding": 100 * emb_count / total,
             "core": 100 * core_param_count / total,
             "readout": 100 * read_count / total,
             "total_params": total,
         }
-
     return result
 
 
 def project_to_pca(
     data: np.ndarray,
-    intervals: list[LabeledInterval] = None,
+    intervals: list[list[int]] | None = None,
     divide_variance: bool = False,
-):
+) -> tuple[np.ndarray, PCA]:
     """
-    - data: usually a np.array with shape (n_frames, n_features)
-    - intervals: if not provided, projects to the PCAs using the entire session. if provided, selects only the frames contained in the intervals and stack them. necessary for training to not leak information, for example. provide only the training intervals in such case.
+    Project data to principal components using PCA.
 
-    important: i fit on the intervals (training) and then use the components to project the entire dataset.
+    Parameters
+    ----------
+    data : np.ndarray
+        Data array of shape (n_frames, n_features).
+    intervals : list, optional
+        List of (start, end) intervals to fit PCA. If None, use all data. Default is None.
+    divide_variance : bool, optional
+        Whether to standardize data before PCA. Default is False.
+
+    Returns
+    -------
+    tuple
+        (Transformed data, fitted PCA object)
     """
     if intervals:
         data_ = np.concatenate(
-            [data[interval.start : interval.end] for interval in intervals],
+            [data[s:e] for s, e in intervals],
             axis=0,
         )
     else:
@@ -358,3 +441,69 @@ def project_to_pca(
     pca.fit(data_)
     data_ = pca.transform(data)
     return data_, pca
+
+
+def align_intervals(
+    data: np.ndarray,
+    intervals: list[list[int]],
+    overlap: int = 10,
+    method: str = "end",
+) -> np.ndarray:
+    """
+    Align intervals of data to a common length, either by start or end.
+
+    This function takes a data array of shape (n_frames, n_features) and a list
+    of intervals, where each interval is a (start, end) pair. It returns a new
+    array of shape (n_intervals, max_len, n_features), where each interval is
+    aligned either by its start or end.
+
+    If aligning by 'start', all intervals are assumed to start at the same
+    time point, and the array is padded with NaNs at the end as needed.
+    If aligning by 'end', all intervals are assumed to end at the same time
+    point, and the array is padded with NaNs at the beginning.
+
+    To determine max_len, the function finds the maximum interval length that
+    is shared by at least `overlap + 1` intervals. This strategy reduces
+    variance when averaging over intervals.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Data array of shape (n_frames, n_features).
+    intervals : list of list of int
+        List of (start, end) intervals.
+    overlap : int, optional
+        Minimum number of intervals with the same length to consider for max_len. Default is 10.
+    method : {'start', 'end'}, optional
+        'start' to align by start, 'end' to align by end. Default is 'end'.
+
+    Returns
+    -------
+    np.ndarray
+        Aligned data of shape (n_intervals, max_len, n_features) with NaNs for padding.
+    """
+    lengths = np.array([end - start + 1 for start, end in intervals])
+    max_len = max(
+        [
+            length
+            for length in lengths
+            if np.sum(lengths >= length) >= (overlap + 1)
+        ]
+    )
+
+    aligned_data = np.full((len(intervals), max_len, data.shape[-1]), np.nan)
+    for i, (start, end) in enumerate(intervals):
+        if method == "start":
+            aligned_data[i, : end - start + 1] = (
+                data[start : end + 1]
+                if end - start + 1 <= max_len
+                else data[start : start + max_len]
+            )
+        elif method == "end":
+            aligned_data[i, -(end - start + 1) :] = (
+                data[start : end + 1]
+                if end - start + 1 <= max_len
+                else data[end - max_len + 1 : end + 1]
+            )
+
+    return aligned_data

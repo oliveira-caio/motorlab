@@ -4,21 +4,43 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import plotly.graph_objs as go
 import seaborn as sns
-import sklearn
+import umap
 
 from lipstick import GifMaker, update_fig
+from sklearn.metrics import confusion_matrix as sklearn_cm
 
-from . import data
-from . import metrics
-from . import poses
-from . import room
-from . import utils
+from motorlab import data, intervals, metrics, room, utils
 
 
 def confusion_matrix(
-    gts, preds, group=None, include_sitting=False, concat=False, save_path=None
-):
+    gts: dict,
+    preds: dict,
+    group: str | None = None,
+    include_sitting: bool = False,
+    concat: bool = False,
+    save_path: str | None = None,
+) -> None:
+    """
+        Plot confusion matrices for predictions vs. ground truth for each session.
+
+        Parameters
+        ----------
+        gts,
+        preds,
+        group=None,
+        include_sitting=False,
+        concat=False,
+        save_path=None,
+    ):
+            Whether to include sitting tiles. Default is False.
+        concat : bool, optional
+            Whether to concatenate all sessions. Default is False.
+        save_path : str, optional
+            Path to save the figure. Default is None.
+    """
+
     def group_y(x):
         return x // 3
 
@@ -81,9 +103,7 @@ def confusion_matrix(
             pred = preds[session]
 
         acc = metrics.balanced_accuracy(gt, pred)
-        conf_mat = sklearn.metrics.confusion_matrix(
-            gt, pred, labels=tiles_vec, normalize="true"
-        )
+        conf_mat = sklearn_cm(gt, pred, labels=tiles_vec, normalize="true")
 
         sns.heatmap(
             conf_mat,
@@ -108,11 +128,26 @@ def confusion_matrix(
 
 
 def room_histogram2d(gts, preds, concat=False, colorbar=True, save_path=None):
+    """
+    Plot 2D histograms of predicted vs. ground truth positions for each session.
+
+    Parameters
+    ----------
+    gts : dict
+        Ground truth positions for each session.
+    preds : dict
+        Predicted positions for each session.
+    concat : bool, optional
+        Whether to concatenate all sessions. Default is False.
+    colorbar : bool, optional
+        Whether to show colorbar. Default is True.
+    save_path : str, optional
+        Path to save the figure. Default is None.
+    """
     if concat:
         gts = {
             "all": np.concatenate(list(gts.values()), axis=0),
         }
-
         preds = {
             "all": np.concatenate(list(preds.values()), axis=0),
         }
@@ -131,6 +166,7 @@ def room_histogram2d(gts, preds, concat=False, colorbar=True, save_path=None):
     )
     outer_axes = np.array(outer_axes).reshape(nrows, ncols)
 
+    img = None
     for idx, session in enumerate(sessions):
         gt = gts[session]
         pred = preds[session]
@@ -198,7 +234,7 @@ def room_histogram2d(gts, preds, concat=False, colorbar=True, save_path=None):
     for ax in outer_axes.ravel()[len(sessions) :]:
         ax.axis("off")
 
-    if colorbar:
+    if colorbar and img is not None:
         fig.colorbar(
             img, ax=outer_axes, orientation="vertical", location="right"
         )
@@ -210,41 +246,50 @@ def room_histogram2d(gts, preds, concat=False, colorbar=True, save_path=None):
 
 
 def poses3d(
-    data,
-    experiment,
-    save_path=None,
-    return_fig=False,
-    fps=20,
-):
+    data: np.ndarray,
+    experiment: str,
+    save_path: str | None = None,
+    return_fig: bool = False,
+    fps: int = 20,
+) -> list[plt.Figure] | None:
     """
-    Plot or animate 3D human pose(s) using a given skeleton structure.
+        Plot or animate 3D human pose(s) using a given skeleton structure.
 
-    Parameters:
-    - poses (ndarray): Array of shape (J, 3) or (T, J, 3) representing 3D joint positions.
-    - save_path (str, optional): If given and ends with .gif, saves output GIF here.
-    - return_fig (bool, optional): If True, returns list of Figures instead of displaying/saving.
-    - fps (int, optional): Frames per second for GIF export if `poses` is 3D.
+        Parameters
+        ----------
+        data,
+        experiment,
+        save_path=None,
+        return_fig=False,
+        fps=20,
+    ):
+        return_fig : bool, optional
+            If True, returns list of Figures instead of displaying/saving. Default is False.
+        fps : int, optional
+            Frames per second for GIF export if `data` is 3D. Default is 20.
 
-    Returns:
-    - matplotlib.figure.Figure, list of Figures, or None.
+        Returns
+        -------
+        list[plt.Figure] | None
+            List of Figures if `return_fig` is True, otherwise None.
     """
 
     def draw_pose(pose):
         fig = plt.figure()
         ax = fig.add_subplot(111, projection="3d")
 
-        for s, e in poses.SKELETON:
+        for s, e in utils.SKELETON:
             x = [
-                pose[poses.keypoints_dict[experiment][s], 0],
-                pose[poses.keypoints_dict[experiment][e], 0],
+                pose[utils.KEYPOINTS[experiment][s], 0],
+                pose[utils.KEYPOINTS[experiment][e], 0],
             ]
             y = [
-                pose[poses.keypoints_dict[experiment][s], 1],
-                pose[poses.keypoints_dict[experiment][e], 1],
+                pose[utils.KEYPOINTS[experiment][s], 1],
+                pose[utils.KEYPOINTS[experiment][e], 1],
             ]
             z = [
-                pose[poses.keypoints_dict[experiment][s], 2],
-                pose[poses.keypoints_dict[experiment][e], 2],
+                pose[utils.KEYPOINTS[experiment][s], 2],
+                pose[utils.KEYPOINTS[experiment][e], 2],
             ]
             ax.plot(x, y, z, color="blue")
 
@@ -288,11 +333,27 @@ def poses3d(
         update_fig(fig, ax)
 
 
-def com(DATA_DIR, sessions=None, ncols=3, homing=False, save_path=None):
-    DATA_DIR = Path(DATA_DIR)
+def com(data_dir, sessions=None, ncols=3, homing=False, save_path=None):
+    """
+    Plot center of mass (COM) trajectories for each session.
+
+    Parameters
+    ----------
+    data_dir : str or Path
+        Directory containing session data.
+    sessions : list of str, optional
+        List of session names. Default is None (use directory name).
+    ncols : int, optional
+        Number of columns in subplot grid. Default is 3.
+    homing : bool, optional
+        Whether to plot homing intervals. Default is False.
+    save_path : str, optional
+        Path to save the figure. Default is None.
+    """
+    data_dir = Path(data_dir)
     if sessions is None:
-        sessions = [DATA_DIR.name]
-        DATA_DIR = DATA_DIR.parent
+        sessions = [data_dir.name]
+        data_dir = data_dir.parent
 
     n_sessions = len(sessions)
     ncols = min(ncols, n_sessions)
@@ -309,18 +370,31 @@ def com(DATA_DIR, sessions=None, ncols=3, homing=False, save_path=None):
     axs = axs.flat
 
     for i, s in enumerate(sessions):
-        POSES_DIR = DATA_DIR / s / "poses"
-        poses_ = data.load_from_memmap(POSES_DIR)
+        poses_dir = data_dir / s / "poses"
+        poses_ = data.load_from_memmap(poses_dir)
         poses_ = poses_.reshape(-1, 21, 3)
-        com = poses_[:, poses.com_keypoints_idxs["gbyk"], :2].mean(axis=1)
+        com = poses_[:, utils.COM_KEYPOINTS_IDXS["gbyk"], :2].mean(axis=1)
 
-        TRIALS_DIR = DATA_DIR / s / "trials"
+        trials_dir = data_dir / s / "trials"
+        tiles = None
+        try:
+            tiles = data.load_tiles(data_dir, s, "gbyk", "tiles")
+        except Exception:
+            pass
         if homing:
-            intervals = utils.get_homing_intervals(TRIALS_DIR)
+            _intervals = (
+                intervals.get_homing_intervals(trials_dir, tiles)
+                if tiles is not None
+                else []
+            )
         else:
-            intervals = utils.get_trials_intervals(TRIALS_DIR)
+            _intervals = (
+                intervals.get_trials_intervals(trials_dir, tiles)
+                if tiles is not None
+                else []
+            )
 
-        for start, end in intervals:
+        for start, end in _intervals:
             axs[i].plot(com[start:end, 0], com[start:end, 1], color="b")
             axs[i].set_title(s)
 
@@ -329,3 +403,73 @@ def com(DATA_DIR, sessions=None, ncols=3, homing=False, save_path=None):
 
     plt.tight_layout()
     plt.show()
+
+
+def umap3d(
+    data,
+    conditions,
+    plot_title="",
+    plot_filename="",
+    show=True,
+):
+    """
+    Plot 3D UMAP embedding for different conditions.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Data to embed and plot.
+    conditions : dict
+        Dictionary mapping condition labels to intervals.
+    plot_title : str, optional
+        Title for the plot. Default is "".
+    plot_filename : str, optional
+        Path to save the plot as HTML. Default is "".
+    show : bool, optional
+        Whether to display the plot. Default is True.
+    """
+    color_palette = dict(
+        zip(conditions.keys(), sns.color_palette("tab10", len(conditions)))
+    )
+    fig = go.Figure()
+
+    for cond_label, cond_intervals in conditions.items():
+        data_aligned = utils.align_intervals(data, cond_intervals)
+        data_aligned = np.nanmean(data_aligned, axis=0)
+
+        reducer = umap.UMAP(n_components=3, random_state=0)
+        data_transformed = reducer.fit_transform(data_aligned)
+
+        color = tuple(int(255 * c) for c in color_palette[cond_label])
+        fig.add_trace(
+            go.Scatter3d(
+                x=data_transformed[:, 0],
+                y=data_transformed[:, 1],
+                z=data_transformed[:, 2],
+                mode="lines",
+                name=cond_label,
+                line=dict(color=f"rgb{color}"),
+            )
+        )
+
+    fig.update_layout(
+        title=plot_title,
+        scene=dict(
+            xaxis_title="UMAP1",
+            yaxis_title="UMAP2",
+            zaxis_title="UMAP3",
+            xaxis=dict(showbackground=False),
+            yaxis=dict(showbackground=False),
+            zaxis=dict(showbackground=False),
+            bgcolor="rgba(0,0,0,0)",
+            aspectmode="data",
+            camera=dict(eye=dict(x=1.5, y=1.5, z=1.5)),
+        ),
+        legend=dict(itemsizing="constant"),
+        margin=dict(l=10, r=10, t=40, b=10),
+    )
+
+    if plot_filename is not None:
+        fig.write_html(plot_filename)
+    if show:
+        fig.show()

@@ -6,6 +6,23 @@ from sklearn.metrics import balanced_accuracy_score
 
 
 def compute(gts: dict, preds: dict, metric: str):
+    """
+    Compute a metric over all sessions.
+
+    Parameters
+    ----------
+    gts : dict
+        Ground truth arrays for each session.
+    preds : dict
+        Prediction arrays for each session.
+    metric : str
+        Metric to compute ('accuracy', 'mse', 'correlation').
+
+    Returns
+    -------
+    float or tuple
+        Computed metric value(s).
+    """
     if metric == "accuracy":
         return np.mean(
             [
@@ -34,10 +51,40 @@ def compute(gts: dict, preds: dict, metric: str):
 
 
 def mse(gt: np.ndarray, pred: np.ndarray) -> float:
+    """
+    Compute mean squared error (MSE) between ground truth and predictions.
+
+    Parameters
+    ----------
+    gt : np.ndarray
+        Ground truth array.
+    pred : np.ndarray
+        Prediction array.
+
+    Returns
+    -------
+    float
+        Mean squared error.
+    """
     return np.mean((gt - pred) ** 2).item()
 
 
 def balanced_accuracy(gt: np.ndarray, pred: np.ndarray) -> float:
+    """
+    Compute balanced accuracy between ground truth and predictions.
+
+    Parameters
+    ----------
+    gt : np.ndarray
+        Ground truth labels.
+    pred : np.ndarray
+        Predicted labels.
+
+    Returns
+    -------
+    float
+        Balanced accuracy score.
+    """
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
@@ -49,6 +96,21 @@ def balanced_accuracy(gt: np.ndarray, pred: np.ndarray) -> float:
 
 
 def accuracy(gt: np.ndarray, pred: np.ndarray) -> float:
+    """
+    Compute accuracy (balanced accuracy) for classification predictions.
+
+    Parameters
+    ----------
+    gt : np.ndarray
+        Ground truth labels.
+    pred : np.ndarray
+        Prediction logits or probabilities.
+
+    Returns
+    -------
+    float
+        Balanced accuracy score.
+    """
     pred = pred.reshape(-1, pred.shape[-1])
     pred = pred.argmax(axis=-1)
     gt = gt.reshape(-1)
@@ -56,6 +118,23 @@ def accuracy(gt: np.ndarray, pred: np.ndarray) -> float:
 
 
 def global_correlation(gt: np.ndarray, pred: np.ndarray, reduce: bool = True):
+    """
+    Compute global correlation between ground truth and predictions.
+
+    Parameters
+    ----------
+    gt : np.ndarray
+        Ground truth array.
+    pred : np.ndarray
+        Prediction array.
+    reduce : bool, optional
+        Whether to average over features. Default is True.
+
+    Returns
+    -------
+    float or np.ndarray
+        Global correlation value(s).
+    """
     # gt, pred: (batch_size, seq_len, n_features)
     pred = pred.reshape(-1, pred.shape[-1])
     gt = gt.reshape(-1, gt.shape[-1])
@@ -77,6 +156,23 @@ def global_correlation(gt: np.ndarray, pred: np.ndarray, reduce: bool = True):
 
 
 def local_correlation(gt: np.ndarray, pred: np.ndarray, reduce: bool = True):
+    """
+    Compute local (per-frame) correlation between ground truth and predictions.
+
+    Parameters
+    ----------
+    gt : np.ndarray
+        Ground truth array.
+    pred : np.ndarray
+        Prediction array.
+    reduce : bool, optional
+        Whether to average over features. Default is True.
+
+    Returns
+    -------
+    float or np.ndarray
+        Local correlation value(s).
+    """
     # gt, pred: (batch_size, seq_len, n_features)
     gt_centered = gt - np.nanmean(gt, axis=1, keepdims=True)
     pred_centered = pred - np.nanmean(pred, axis=1, keepdims=True)

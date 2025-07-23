@@ -8,6 +8,23 @@ from . import utils
 
 
 def compute_speed(poses, representation, experiment):
+    """
+    Compute speed from pose data using the specified representation.
+
+    Parameters
+    ----------
+    poses : np.ndarray
+        Pose data array.
+    representation : str
+        Type of speed representation ('kps_vec', 'com_vec', 'kps_mag', 'com_mag').
+    experiment : str
+        Experiment name (for keypoint selection).
+
+    Returns
+    -------
+    np.ndarray
+        Speed array.
+    """
     duration, n_3d_keypoints = poses.shape
 
     if representation == "kps_vec":
@@ -15,7 +32,7 @@ def compute_speed(poses, representation, experiment):
         speed[1:] = np.diff(poses, axis=0)
     elif representation == "com_vec":
         poses = poses.reshape(duration, n_3d_keypoints // 3, 3)
-        com = poses[:, com_keypoints_idxs[experiment]].mean(axis=1)
+        com = poses[:, utils.COM_KEYPOINTS_IDXS[experiment]].mean(axis=1)
         speed = np.zeros_like(com)
         speed[1:] = np.diff(com, axis=0)
     elif representation == "kps_mag":
@@ -25,7 +42,7 @@ def compute_speed(poses, representation, experiment):
         )
     elif representation == "com_mag":
         poses = poses.reshape(duration, n_3d_keypoints // 3, 3)
-        com = poses[:, com_keypoints_idxs[experiment]].mean(axis=1)
+        com = poses[:, utils.COM_KEYPOINTS_IDXS[experiment]].mean(axis=1)
         speed = np.zeros((com.shape[0], 1))
         speed[1:] = np.linalg.norm(np.diff(com, axis=0), axis=1, keepdims=True)
     else:
@@ -35,19 +52,64 @@ def compute_speed(poses, representation, experiment):
 
 
 def compute_acceleration(speed):
+    """
+    Compute acceleration from speed data.
+
+    Parameters
+    ----------
+    speed : np.ndarray
+        Speed array.
+
+    Returns
+    -------
+    np.ndarray
+        Acceleration array.
+    """
     accel = np.zeros_like(speed)
     accel[1:] = np.diff(speed, axis=0)
     return accel
 
 
 def compute_com(poses, experiment: str):
+    """
+    Compute the center of mass (COM) for each frame.
+
+    Parameters
+    ----------
+    poses : np.ndarray
+        Pose data array.
+    experiment : str
+        Experiment name (for keypoint selection).
+
+    Returns
+    -------
+    np.ndarray
+        COM positions (N, 2).
+    """
     duration, n_3d_keypoints = poses.shape
     poses = poses.reshape(duration, n_3d_keypoints // 3, 3)
-    com = poses[:, com_keypoints_idxs[experiment], :2].mean(axis=1)
+    com = poses[:, utils.COM_KEYPOINTS_IDXS[experiment], :2].mean(axis=1)
     return com
 
 
 def change_representation(data, representation, experiment):
+    """
+    Change the body representation of pose data.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Pose data array.
+    representation : str
+        Target representation ('allocentric', 'centered', 'egocentric', 'distances', 'angles', 'trunk').
+    experiment : str
+        Experiment name (for keypoint selection).
+
+    Returns
+    -------
+    np.ndarray
+        Transformed pose data.
+    """
     if representation == "allocentric":
         new_poses = compute_allocentric(data, experiment)
     elif representation == "centered":
@@ -66,12 +128,27 @@ def change_representation(data, representation, experiment):
 
 
 def compute_trunk(data, experiment):
+    """
+    Compute trunk-centered pose representation.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Pose data array.
+    experiment : str
+        Experiment name (for keypoint selection).
+
+    Returns
+    -------
+    np.ndarray
+        Trunk-centered pose data.
+    """
     n_frames, n_3d_keypoints = data.shape
     trunk_poses = data.reshape(n_frames, n_3d_keypoints // 3, 3).copy()
 
-    neck = trunk_poses[:, keypoints_dict[experiment]["neck"]]
-    s_tail = trunk_poses[:, keypoints_dict[experiment]["s_tail"]]
-    r_wrist = trunk_poses[:, keypoints_dict[experiment]["r_wrist"]]
+    neck = trunk_poses[:, utils.KEYPOINTS[experiment]["neck"]]
+    s_tail = trunk_poses[:, utils.KEYPOINTS[experiment]["s_tail"]]
+    r_wrist = trunk_poses[:, utils.KEYPOINTS[experiment]["r_wrist"]]
 
     trunk_poses = trunk_poses - neck[:, None, :]
 
@@ -93,17 +170,34 @@ def compute_trunk(data, experiment):
 
 
 def compute_distances(data, experiment):
+    """
+    Compute pairwise distances between skeleton segments (neckless skeleton).
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Pose data array.
+    experiment : str
+        Experiment name (for keypoint selection).
+
+    Returns
+    -------
+    np.ndarray
+        Distances for each skeleton segment.
+    """
     n_frames, n_3d_keypoints = data.shape
     data_copy = data.reshape(n_frames, n_3d_keypoints // 3, 3).copy()
-    dist_poses = np.empty((n_frames, len(neckless_skeleton)), dtype=np.float32)
+    dist_poses = np.empty(
+        (n_frames, len(utils.get_neckless_skeleton())), dtype=np.float32
+    )
     dist_poses = np.stack(
         [
             np.linalg.norm(
-                data_copy[:, keypoints_dict[experiment][s]]
-                - data_copy[:, keypoints_dict[experiment][e]],
+                data_copy[:, utils.KEYPOINTS[experiment][s]]
+                - data_copy[:, utils.KEYPOINTS[experiment][e]],
                 axis=1,
             )
-            for s, e in neckless_skeleton
+            for s, e in utils.get_neckless_skeleton()
         ],
         axis=1,
     )
@@ -111,11 +205,26 @@ def compute_distances(data, experiment):
 
 
 def compute_centered(data, experiment):
+    """
+    Center pose data at the midpoint between left and right ears.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Pose data array.
+    experiment : str
+        Experiment name (for keypoint selection).
+
+    Returns
+    -------
+    np.ndarray
+        Centered pose data.
+    """
     n_frames, n_3d_keypoints = data.shape
     centered_poses = data.reshape(n_frames, n_3d_keypoints // 3, 3).copy()
 
-    r_ear = centered_poses[:, [keypoints_dict[experiment]["r_ear"]]]
-    l_ear = centered_poses[:, [keypoints_dict[experiment]["l_ear"]]]
+    r_ear = centered_poses[:, [utils.KEYPOINTS[experiment]["r_ear"]]]
+    l_ear = centered_poses[:, [utils.KEYPOINTS[experiment]["l_ear"]]]
     middle_head = 0.5 * (l_ear + r_ear)
 
     centered_poses = centered_poses - middle_head
@@ -125,11 +234,26 @@ def compute_centered(data, experiment):
 
 
 def compute_allocentric(data, experiment):
+    """
+    Compute allocentric pose representation (room-centered, with head position appended).
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Pose data array.
+    experiment : str
+        Experiment name (for keypoint selection).
+
+    Returns
+    -------
+    np.ndarray
+        Allocentric pose data with head position.
+    """
     n_frames, n_3d_keypoints = data.shape
     allo_poses = data.reshape(n_frames, n_3d_keypoints // 3, 3).copy()
 
-    r_ear = allo_poses[:, [keypoints_dict[experiment]["r_ear"]]]
-    l_ear = allo_poses[:, [keypoints_dict[experiment]["l_ear"]]]
+    r_ear = allo_poses[:, [utils.KEYPOINTS[experiment]["r_ear"]]]
+    l_ear = allo_poses[:, [utils.KEYPOINTS[experiment]["l_ear"]]]
     middle_head = 0.5 * (l_ear + r_ear)
 
     allo_poses = allo_poses - middle_head
@@ -141,12 +265,27 @@ def compute_allocentric(data, experiment):
 
 
 def compute_egocentric(data, experiment):
+    """
+    Compute egocentric pose representation (head-centered, rotated to head axes).
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Pose data array.
+    experiment : str
+        Experiment name (for keypoint selection).
+
+    Returns
+    -------
+    np.ndarray
+        Egocentric pose data.
+    """
     n_frames, n_3d_keypoints = data.shape
     ego_poses = data.reshape(n_frames, n_3d_keypoints // 3, 3).copy()
 
-    r_ear = ego_poses[:, [keypoints_dict[experiment]["r_ear"]]]
-    l_ear = ego_poses[:, [keypoints_dict[experiment]["l_ear"]]]
-    nose = ego_poses[:, [keypoints_dict[experiment]["nose"]]]
+    r_ear = ego_poses[:, [utils.KEYPOINTS[experiment]["r_ear"]]]
+    l_ear = ego_poses[:, [utils.KEYPOINTS[experiment]["l_ear"]]]
+    nose = ego_poses[:, [utils.KEYPOINTS[experiment]["nose"]]]
     middle_head = 0.5 * (l_ear + r_ear)
 
     ego_poses = ego_poses - middle_head
@@ -165,8 +304,8 @@ def compute_egocentric(data, experiment):
     ego_poses = np.einsum("nij,nkj->nki", cob_matrices, ego_poses)
 
     # for kp in ["head", "nose", "r_ear", "l_ear", "l_eye", "r_eye", "neck"]:
-    #     new_poses[:, keypoints_dict[experiment][kp]] = new_poses[
-    #         :, keypoints_dict[experiment][kp]
+    #     new_poses[:, utils.KEYPOINTS[experiment][kp]] = new_poses[
+    #         :, utils.KEYPOINTS[experiment][kp]
     #     ].mean(axis=0)
 
     ego_poses = np.reshape(ego_poses, (n_frames, n_3d_keypoints))
@@ -175,9 +314,26 @@ def compute_egocentric(data, experiment):
 
 
 def exclude_keypoints(data, keypoints, experiment):
+    """
+    Exclude specified keypoints from pose data.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Pose data array.
+    keypoints : list[str]
+        List of keypoint names to exclude.
+    experiment : str
+        Experiment name (for keypoint selection).
+
+    Returns
+    -------
+    np.ndarray
+        Pose data with specified keypoints removed.
+    """
     if not keypoints:
         return data
-    indices = [keypoints_dict[experiment][kp] for kp in keypoints]
+    indices = [utils.KEYPOINTS[experiment][kp] for kp in keypoints]
     n_frames, n_3d_keypoints = data.shape
     data = np.reshape(data, (n_frames, n_3d_keypoints // 3, 3))
     data = np.delete(data, indices, axis=1)
@@ -186,9 +342,26 @@ def exclude_keypoints(data, keypoints, experiment):
 
 
 def zero_keypoints(poses, keypoints, experiment):
+    """
+    Set specified keypoints to zero in pose data.
+
+    Parameters
+    ----------
+    poses : np.ndarray
+        Pose data array.
+    keypoints : list[str]
+        List of keypoint names to zero out.
+    experiment : str
+        Experiment name (for keypoint selection).
+
+    Returns
+    -------
+    np.ndarray
+        Pose data with specified keypoints zeroed.
+    """
     if not keypoints:
         return poses
-    indices = [keypoints_dict[experiment][kp] for kp in keypoints]
+    indices = [utils.KEYPOINTS[experiment][kp] for kp in keypoints]
     duration, n_3d_keypoints = poses.shape
     poses = np.reshape(poses, (duration, n_3d_keypoints // 3, 3))
     poses[:, indices, :] = 0.0
@@ -197,6 +370,21 @@ def zero_keypoints(poses, keypoints, experiment):
 
 
 def normalize_poses(poses, POSES_DIR):
+    """
+    Normalize pose data to [-1, 1] using min/max from metadata.
+
+    Parameters
+    ----------
+    poses : np.ndarray
+        Pose data array.
+    POSES_DIR : str or Path
+        Directory containing min/max metadata.
+
+    Returns
+    -------
+    np.ndarray
+        Normalized pose data.
+    """
     POSES_DIR = Path(POSES_DIR)
     with open(POSES_DIR / "meta" / "min.npy", "rb") as f:
         min_coord = np.load(f).item()
@@ -206,14 +394,36 @@ def normalize_poses(poses, POSES_DIR):
 
 
 def preprocess(
-    data, config, experiment="gbyk", intervals=None, pcs_to_exclude=None
-):
-    """preprocess poses data before training the model.
+    data: np.ndarray,
+    config: dict,
+    experiment: str = "gbyk",
+    intervals: list[list[int]] | None = None,
+    pcs_to_exclude: np.ndarray | None = None,
+) -> np.ndarray:
+    """
+    Preprocess pose data before training the model.
 
-    WARNING: the order of the functions matter.
-        - you CAN'T exclude the keypoints before changing the representation because the indices for the head keypoints are fixed and are used to change the representation, for example.
-        - excluding the keypoints AND projecting to PCA may lead to weird results.
-        - excluding
+    WARNING: The order of the functions matters.
+        - You CAN'T exclude the keypoints before changing the representation because the indices for the head keypoints are fixed and are used to change the representation, for example.
+        - Excluding the keypoints AND projecting to PCA may lead to weird results.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Pose data array.
+    config : dict
+        Configuration dictionary for preprocessing.
+    experiment : str, optional
+        Experiment name. Default is 'gbyk'.
+    intervals : np.ndarray, optional
+        Intervals for PCA projection. Default is None.
+    pcs_to_exclude : np.ndarray, optional
+        Principal components to exclude. Default is None.
+
+    Returns
+    -------
+    np.ndarray
+        Preprocessed pose data.
     """
 
     if "representation" in config:
@@ -248,6 +458,21 @@ def preprocess(
 
 
 def compute_elevation_angle(p1: np.ndarray, p2: np.ndarray) -> np.ndarray:
+    """
+    Compute the elevation angle between two points.
+
+    Parameters
+    ----------
+    p1 : np.ndarray
+        First point(s), shape (..., 3).
+    p2 : np.ndarray
+        Second point(s), shape (..., 3).
+
+    Returns
+    -------
+    np.ndarray
+        Elevation angle(s) in radians.
+    """
     dz = p2[..., 2] - p1[..., 2]
     dx = p2[..., 0] - p1[..., 0]
     dy = p2[..., 1] - p1[..., 1]
@@ -256,6 +481,21 @@ def compute_elevation_angle(p1: np.ndarray, p2: np.ndarray) -> np.ndarray:
 
 
 def compute_joint_angle(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
+    """
+    Compute the angle between two vectors.
+
+    Parameters
+    ----------
+    v1 : np.ndarray
+        First vector(s).
+    v2 : np.ndarray
+        Second vector(s).
+
+    Returns
+    -------
+    np.ndarray
+        Angle(s) in radians.
+    """
     v1_normalized = v1 / (np.linalg.norm(v1, axis=-1, keepdims=True) + 1e-8)
     v2_normalized = v2 / (np.linalg.norm(v2, axis=-1, keepdims=True) + 1e-8)
     dot = np.sum(v1_normalized * v2_normalized, axis=-1)
@@ -266,16 +506,31 @@ def compute_joint_angle(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
 def compute_angles(
     poses: np.ndarray,
     experiment: str,
-):
+) -> np.ndarray:
+    """
+    Compute joint and elevation angles for all frames.
+
+    Parameters
+    ----------
+    poses : np.ndarray
+        Pose data array.
+    experiment : str
+        Experiment name (for keypoint selection).
+
+    Returns
+    -------
+    np.ndarray
+        Concatenated joint and elevation angles for each frame.
+    """
     n_frames = poses.shape[0]
-    n_keypoints = len(keypoints_dict[experiment])
+    n_keypoints = len(utils.KEYPOINTS[experiment])
     poses = poses.reshape(n_frames, n_keypoints, 3)
 
     joint_angles = []
-    for a, b, c in joint_angles_idxs:
-        pa = poses[:, keypoints_dict[experiment][a]]
-        pb = poses[:, keypoints_dict[experiment][b]]
-        pc = poses[:, keypoints_dict[experiment][c]]
+    for a, b, c in utils.JOINT_ANGLES_IDXS[experiment]:
+        pa = poses[:, utils.KEYPOINTS[experiment][a]]
+        pb = poses[:, utils.KEYPOINTS[experiment][b]]
+        pc = poses[:, utils.KEYPOINTS[experiment][c]]
         v1 = pa - pb
         v2 = pc - pb
         ang = compute_joint_angle(v1, v2)
@@ -283,9 +538,9 @@ def compute_angles(
     joint_angles = np.stack(joint_angles, axis=1)
 
     elevation_angles = []
-    for a, b in SKELETON:
-        p1 = poses[:, keypoints_dict[experiment][a]]
-        p2 = poses[:, keypoints_dict[experiment][b]]
+    for a, b in utils.SKELETON:
+        p1 = poses[:, utils.KEYPOINTS[experiment][a]]
+        p2 = poses[:, utils.KEYPOINTS[experiment][b]]
         elev = compute_elevation_angle(p1, p2)
         elevation_angles.append(elev)
     elevation_angles = np.stack(elevation_angles, axis=1)

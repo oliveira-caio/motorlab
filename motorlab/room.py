@@ -1,6 +1,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
+from matplotlib.patches import Rectangle
+
 
 # room size
 x_size = 2.595
@@ -12,22 +14,49 @@ y_divisions = 5
 
 
 def get_tiles(xs, ys):
+    """
+    Compute the tile number for given x and y coordinates in the room.
+
+    Parameters
+    ----------
+    xs : array-like or float
+        X coordinates (meters).
+    ys : array-like or float
+        Y coordinates (meters).
+
+    Returns
+    -------
+    tile_number : array-like or int
+        Tile number(s) corresponding to the input coordinates.
+    """
     tile_width = x_size / x_divisions
     tile_height = y_size / y_divisions
 
     col = xs // tile_width
     row = ys // tile_height
 
-    # clamp the indices to stay within bounds. just in case the x and y values are out of bound or exact at the boundary of the room. it may occur due to numerical erros in the tracking, for example.
+    # Clamp the indices to stay within bounds.
     col = np.clip(col, 0, x_divisions - 1)
     row = np.clip(row, 0, y_divisions - 1)
 
-    # tiles are numbered left-to-right, bottom-to-top.
+    # Tiles are numbered left-to-right, bottom-to-top.
     tile_number = row * x_divisions + col
     return tile_number
 
 
 def plot(save_path=None):
+    """
+    Plot the room layout with tile divisions and optionally save the figure.
+
+    Parameters
+    ----------
+    save_path : str or Path, optional
+        If provided, the plot will be saved to this path. Default is None.
+
+    Returns
+    -------
+    None
+    """
     tile_width = x_size / x_divisions
     tile_height = y_size / y_divisions
 
@@ -35,7 +64,7 @@ def plot(save_path=None):
 
     # Draw the outer rectangle (the room)
     ax.add_patch(
-        plt.Rectangle(
+        Rectangle(
             (0, 0), x_size, y_size, edgecolor="black", facecolor="none", lw=4
         )
     )
@@ -49,7 +78,7 @@ def plot(save_path=None):
 
             # Draw tile
             ax.add_patch(
-                plt.Rectangle(
+                Rectangle(
                     (x0, y0),
                     tile_width,
                     tile_height,

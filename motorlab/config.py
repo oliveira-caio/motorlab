@@ -6,6 +6,21 @@ if only CONFIG_DIR and CHECKPOINT_DIR are provided, i internally set load and sa
 
 
 def get_default_config(experiment: str, sessions: list[str]) -> dict:
+    """
+    Get a default configuration dictionary for a given experiment and sessions.
+
+    Parameters
+    ----------
+    experiment : str
+        Name of the experiment.
+    sessions : list of str
+        List of session names.
+
+    Returns
+    -------
+    dict
+        Default configuration dictionary.
+    """
     config = {
         "DATA_DIR": f"data/{experiment}",
         "CHECKPOINT_DIR": "checkpoint/poses_to_position",
