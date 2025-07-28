@@ -266,6 +266,7 @@ def intervals(session_dir: Path | str, threshold: int = 60000) -> None:
                 # "walk_end": trials_info.loc[idx, "walk_end"],
                 "reward": trials_info.loc[idx, "reward"],
                 "type": trials_info.loc[idx, "block"],
+                "tier": trials_info.loc[idx, "tier"],
             }
             yaml.dump(data, f)
 

@@ -1,9 +1,9 @@
 import torch
 
 
-class SoftplusReadout(torch.nn.Module):
+class Readout(torch.nn.Module):
     """
-    Module for a session-specific linear layer followed by Softplus activation.
+    Flexible module for multiple session-specific readouts with configurable activation types.
 
     Parameters
     ----------
@@ -11,8 +11,12 @@ class SoftplusReadout(torch.nn.Module):
         List of session names.
     hidden_dim : int
         Hidden dimension size.
-    out_dim : dict[str, int]
-        Output dimension for each session.
+    out_dim : dict[str, dict[str, int]]
+        Output dimensions for each session and each readout name.
+        Example: { 'session1': { 'linear': 2, 'softplus': 3 }, ... }
+    readout_map : dict[str, str]
+        Mapping from readout name to activation type ('linear', 'softplus', etc).
+        Example: { 'linear': 'linear', 'softplus': 'softplus' }
     n_directions : int, optional
         Number of directions (for bidirectional models). Default is 1.
     """
@@ -21,63 +25,38 @@ class SoftplusReadout(torch.nn.Module):
         self,
         sessions: list[str],
         hidden_dim: int,
-        out_dim: dict[str, int],
+        out_dim: dict[str, dict[str, int]],
+        readout_map: dict[str, str],
         n_directions: int = 1,
     ) -> None:
         super().__init__()
-        self.softplus = torch.nn.ModuleDict(
-            {
-                session: torch.nn.Sequential(
-                    torch.nn.Linear(
+
+        self.readouts = torch.nn.ModuleDict({})
+        for session in sessions:
+            session_dict = {}
+            for modality, readout in readout_map.items():
+                if readout == "linear":
+                    session_dict[modality] = torch.nn.Linear(
                         n_directions * hidden_dim,
-                        out_dim[session],
-                    ),
-                    torch.nn.Softplus(),
-                )
-                for session in sessions
-            }
-        )
+                        out_dim[session][modality],
+                    )
+                elif readout == "softplus":
+                    session_dict[modality] = torch.nn.Sequential(
+                        torch.nn.Linear(
+                            n_directions * hidden_dim,
+                            out_dim[session][modality],
+                        ),
+                        torch.nn.Softplus(),
+                    )
+                else:
+                    raise ValueError(f"unknown readout type: {readout}.")
+            self.readouts[session] = torch.nn.ModuleDict(session_dict)
 
-    def forward(self, x: torch.Tensor, session: str) -> torch.Tensor:
-        return self.softplus[session](x)
-
-
-class LinearReadout(torch.nn.Module):
-    """
-    Module for a session-specific linear output layer.
-
-    Parameters
-    ----------
-    sessions : list[str]
-        List of session names.
-    hidden_dim : int
-        Hidden dimension size.
-    out_dim : dict[str, int]
-        Output dimension for each session.
-    n_directions : int, optional
-        Number of directions (for bidirectional models). Default is 1.
-    """
-
-    def __init__(
-        self,
-        sessions: list[str],
-        hidden_dim: int,
-        out_dim: dict[str, int],
-        n_directions: int = 1,
-    ) -> None:
-        super().__init__()
-        self.linear = torch.nn.ModuleDict(
-            {
-                session: torch.nn.Linear(
-                    n_directions * hidden_dim,
-                    out_dim[session],
-                )
-                for session in sessions
-            }
-        )
-
-    def forward(self, x: torch.Tensor, session: str) -> torch.Tensor:
-        return self.linear[session](x)
+    def forward(self, x: torch.Tensor, session: str) -> dict:
+        return {
+            modality: readout(x)
+            for modality, readout in self.readouts[session].items()
+        }
 
 
 class LinearEmbedding(torch.nn.Module):
@@ -143,8 +122,10 @@ class LinRegModel(torch.nn.Module):
             }
         )
 
-    def forward(self, x: torch.Tensor, session: str) -> torch.Tensor:
-        return self.readout[session](x)
+    def forward(
+        self, x: torch.Tensor, session: str, modality: str = "output"
+    ) -> dict:
+        return {modality: self.readout[session](x)}
 
 
 class FCModel(torch.nn.Module):
@@ -175,59 +156,45 @@ class FCModel(torch.nn.Module):
         in_dim: dict[str, int],
         embedding_dim: int,
         hidden_dim: int,
-        out_dim: dict[str, int],
-        n_layers: int = 1,
-        readout_type: str = "linear",
+        out_dim: dict,
+        n_layers: int,
+        readout_map: dict,
     ) -> None:
         super().__init__()
         self.embedding = LinearEmbedding(sessions, in_dim, embedding_dim)
 
         self.core = torch.nn.ModuleList()
         if n_layers > 0:
-            if embedding_dim == hidden_dim:
-                self.core.extend(
-                    [
-                        torch.nn.Sequential(
-                            torch.nn.Linear(embedding_dim, embedding_dim),
-                            torch.nn.ReLU(),
-                        )
-                        for _ in range(n_layers)
-                    ]
+            self.core.append(
+                torch.nn.Sequential(
+                    torch.nn.Linear(embedding_dim, hidden_dim),
+                    torch.nn.ReLU(),
                 )
-            else:
-                self.core.append(
+            )
+            self.core.extend(
+                [
                     torch.nn.Sequential(
-                        torch.nn.Linear(embedding_dim, hidden_dim),
+                        torch.nn.Linear(hidden_dim, hidden_dim),
                         torch.nn.ReLU(),
                     )
-                )
-                self.core.extend(
-                    [
-                        torch.nn.Sequential(
-                            torch.nn.Linear(hidden_dim, hidden_dim),
-                            torch.nn.ReLU(),
-                        )
-                        for _ in range(n_layers - 1)
-                    ]
-                )
-
-        if readout_type == "softplus":
-            self.readout = SoftplusReadout(
-                sessions, hidden_dim, out_dim, n_directions=1
+                    for _ in range(n_layers - 1)
+                ]
             )
-        elif readout_type == "linear":
-            self.readout = LinearReadout(
-                sessions, hidden_dim, out_dim, n_directions=1
-            )
-        else:
-            raise ValueError(f"readout {readout_type} not implemented.")
 
-    def forward(self, x: torch.Tensor, session: str) -> torch.Tensor:
+        self.readout = Readout(
+            sessions,
+            hidden_dim,
+            out_dim,
+            readout_map,
+            n_directions=1,
+        )
+
+    def forward(self, x: torch.Tensor, session: str) -> dict:
         y = self.embedding(x, session)
         for layer in self.core:
             y = layer(y)
-        y = self.readout(y, session)
-        return y
+        out = self.readout(y, session)
+        return out
 
 
 class GRUModel(torch.nn.Module):
@@ -262,11 +229,11 @@ class GRUModel(torch.nn.Module):
         in_dim: dict[str, int],
         embedding_dim: int,
         hidden_dim: int,
-        out_dim: dict[str, int],
-        n_layers: int = 1,
+        out_dim: dict,
+        n_layers: int,
+        readout_map: dict,
         dropout: float = 0.0,
         bidirectional: bool = True,
-        readout_type: str = "linear",
     ) -> None:
         super().__init__()
         self.embedding = LinearEmbedding(sessions, in_dim, embedding_dim)
@@ -279,22 +246,20 @@ class GRUModel(torch.nn.Module):
             bidirectional=bidirectional,
         )
         n_directions = 2 if bidirectional else 1
-        if readout_type == "softplus":
-            self.readout = SoftplusReadout(
-                sessions, hidden_dim, out_dim, n_directions=n_directions
-            )
-        elif readout_type == "linear":
-            self.readout = LinearReadout(
-                sessions, hidden_dim, out_dim, n_directions=n_directions
-            )
-        else:
-            raise ValueError(f"readout {readout_type} not implemented.")
 
-    def forward(self, x: torch.Tensor, session: str) -> torch.Tensor:
+        self.readout = Readout(
+            sessions,
+            hidden_dim,
+            out_dim,
+            readout_map,
+            n_directions=n_directions,
+        )
+
+    def forward(self, x: torch.Tensor, session: str) -> dict:
         y = self.embedding(x, session)
         y = self.core(y)[0]
-        y = self.readout(y, session)
-        return y
+        out = self.readout(y, session)
+        return out
 
 
 class SequentialCrossEntropyLoss(torch.nn.Module):
@@ -313,30 +278,51 @@ class SequentialCrossEntropyLoss(torch.nn.Module):
         return self.loss_fn(pred_flat, target_flat)
 
 
-def losses_map(loss_fn: str) -> torch.nn.Module:
+class DictLoss(torch.nn.Module):
     """
-    Map a string identifier to a PyTorch loss function.
+    Computes the total loss for Readout outputs using a modality-to-loss mapping.
 
     Parameters
     ----------
-    loss_fn : str
-        Name of the loss function ('poisson', 'crossentropy', 'mse').
-
-    Returns
-    -------
-    torch.nn.Module
-        Corresponding loss function module.
-
-    Raises
-    ------
-    ValueError
-        If the loss function name is not recognized.
+    loss_map : dict[str, str]
+        Dictionary mapping modality names to loss function names.
+        Example: {"spike_count": "poisson", "position": "mse"}
     """
-    if loss_fn == "poisson":
-        return torch.nn.PoissonNLLLoss(log_input=False, full=True)
-    elif loss_fn == "crossentropy":
-        return SequentialCrossEntropyLoss()
-    elif loss_fn == "mse":
-        return torch.nn.MSELoss()
-    else:
-        raise ValueError(f"loss function {loss_fn} not implemented.")
+
+    def __init__(self, loss_map: dict[str, str]) -> None:
+        super().__init__()
+
+        loss_dict = {
+            "poisson": torch.nn.PoissonNLLLoss(log_input=False, full=True),
+            "crossentropy": SequentialCrossEntropyLoss(),
+            "mse": torch.nn.MSELoss(),
+        }
+
+        self.loss_fns = torch.nn.ModuleDict({})
+        for modality, loss_name in loss_map.items():
+            if loss_name not in loss_dict:
+                raise ValueError(f"loss function {loss_name} not implemented.")
+            self.loss_fns[modality] = loss_dict[loss_name]
+
+    def forward(self, outputs: dict, targets: dict) -> torch.Tensor:
+        """
+        Compute total loss across all modalities.
+
+        Parameters
+        ----------
+        outputs : dict
+            Dictionary of modality -> predicted tensor from MultiReadout
+        targets : dict
+            Dictionary of modality -> target tensor
+
+        Returns
+        -------
+        torch.Tensor
+            Total loss (sum of all modality losses)
+        """
+        losses = [
+            self.loss_fns[modality](outputs[modality], targets[modality])
+            for modality in outputs
+        ]
+        total_loss = torch.stack(losses).sum()
+        return total_loss

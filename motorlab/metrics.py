@@ -5,49 +5,55 @@ import numpy as np
 from sklearn.metrics import balanced_accuracy_score
 
 
-def compute(gts: dict, preds: dict, metric: str):
+def compute(gts: dict, preds: dict, metrics: dict):
     """
-    Compute a metric over all sessions.
+    Compute metrics over all sessions for each modality.
 
     Parameters
     ----------
     gts : dict
-        Ground truth arrays for each session.
+        Ground truth data structured as {session: {modality: np.ndarray}}.
     preds : dict
-        Prediction arrays for each session.
-    metric : str
-        Metric to compute ('accuracy', 'mse', 'correlation').
+        Prediction data structured as {session: {modality: np.ndarray}}.
+    metrics : dict
+        Metrics to compute for each modality {modality: metric_name}.
 
     Returns
     -------
-    float or tuple
-        Computed metric value(s).
+    dict
+        Computed metric values {metric_name: value} where correlation is
+        split into 'global_corr' and 'local_corr'.
     """
-    if metric == "accuracy":
-        return np.mean(
-            [
-                accuracy(gt, pred)
-                for gt, pred in zip(gts.values(), preds.values())
-            ]
-        )
-    elif metric == "mse":
-        return np.mean(
-            [mse(gt, pred) for gt, pred in zip(gts.values(), preds.values())]
-        )
-    elif metric == "correlation":
-        return np.mean(
-            [
-                global_correlation(gt, pred)
-                for gt, pred in zip(gts.values(), preds.values())
-            ]
-        ), np.mean(
-            [
-                local_correlation(gt, pred)
-                for gt, pred in zip(gts.values(), preds.values())
-            ]
-        )
-    else:
-        raise ValueError(f"metric {metric} not implemented.")
+    results = {}
+
+    for modality, metric_name in metrics.items():
+        # Collect arrays for this modality across all sessions
+        gt_arrays = [gts[session][modality] for session in gts.keys()]
+        pred_arrays = [preds[session][modality] for session in preds.keys()]
+
+        if metric_name == "accuracy":
+            results[metric_name] = np.mean(
+                [accuracy(gt, pred) for gt, pred in zip(gt_arrays, pred_arrays)]
+            )
+        elif metric_name == "mse":
+            results[metric_name] = np.mean(
+                [mse(gt, pred) for gt, pred in zip(gt_arrays, pred_arrays)]
+            )
+        elif metric_name == "correlation":
+            global_corrs = []
+            local_corrs = []
+            for gt, pred in zip(gt_arrays, pred_arrays):
+                global_corr = global_correlation(gt, pred)
+                local_corr = local_correlation(gt, pred)
+                global_corrs.append(global_corr)
+                local_corrs.append(local_corr)
+
+            results["global_corr"] = np.mean(global_corrs)
+            results["local_corr"] = np.mean(local_corrs)
+        else:
+            raise ValueError(f"metric {metric_name} not implemented.")
+
+    return results
 
 
 def mse(gt: np.ndarray, pred: np.ndarray) -> float:
