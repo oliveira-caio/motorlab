@@ -5,7 +5,7 @@ import torch
 import wandb
 
 from motorlab import metrics, utils
-from motorlab.model.factory import save_checkpoint
+from motorlab.model.factory import save_checkpoint, compute_mean
 
 
 def track(metrics, config, model):
@@ -27,7 +27,7 @@ def track(metrics, config, model):
         wandb.log({k: v for k, v in metrics.items() if k != "epoch"})
     if (
         config["track"].get("save_checkpoint", False)
-        and metrics["epoch"] != config["train"]["n_epochs"]
+        and metrics["epoch"] != config["training"]["n_epochs"]
         and (metrics["epoch"] - 1) % 25 == 0
         and metrics["epoch"] != 1
     ):
@@ -50,7 +50,7 @@ def format_metrics(metrics: dict) -> str:
     """
     formatted = []
     for key, value in metrics.items():
-        if "loss" in key or "mse" in key:
+        if "loss" in key or "mse" in key or "corr" in key:
             formatted.append(f"{key}: {value:.4f}")
         elif "accuracy" in key:
             formatted.append(f"{key}: {value:.2f}")
@@ -58,10 +58,6 @@ def format_metrics(metrics: dict) -> str:
             formatted.append(f"{key}: {value:.8f}")
         elif "epoch" in key:
             formatted.append(f"{key}: {value:04d}")
-        elif key == "global_corr":
-            formatted.append(f"global correlation: {value:.4f}")
-        elif key == "local_corr":
-            formatted.append(f"local correlation: {value:.4f}")
     return " | ".join(reversed(formatted))
 
 
@@ -103,51 +99,35 @@ def iterate_entire_trials(
     with torch.no_grad():
         for session in dataloaders:
             for x_trial, y_trial in dataloaders[session]:
-                x_trial = x_trial.to(utils.DEVICE)
+                x_trial = {k: v.to(utils.DEVICE) for k, v in x_trial.items()}
 
-                # Split trial into fixed-length sequences
-                trial_length = x_trial.shape[1]
-                n_seqs = trial_length // seq_length
+                x_seqs = [
+                    {modality: seq}
+                    for modality, tensor in x_trial.items()
+                    for seq in torch.tensor_split(
+                        tensor, tensor.shape[1] // seq_length, dim=1
+                    )
+                ]
 
-                if n_seqs == 0:
-                    continue
+                seq_preds = [model(seq_input, session) for seq_input in x_seqs]
 
-                # Reshape to sequences
-                x_seqs = x_trial[:, : n_seqs * seq_length].reshape(
-                    -1, seq_length, x_trial.shape[2]
-                )
-
-                # Process each sequence
-                seq_preds = []
-                for i in range(x_seqs.shape[0]):
-                    seq_pred = model(x_seqs[i : i + 1], session)
-                    seq_preds.append(seq_pred)
-
-                # Concatenate sequence predictions
                 trial_pred = {}
-                for modality in seq_preds[0].keys():
+                for modality in y_trial.keys():
                     modality_preds = [pred[modality] for pred in seq_preds]
                     trial_pred[modality] = torch.cat(modality_preds, dim=1)
 
-                # Store results
                 for modality in y_trial.keys():
                     if modality not in gts[session]:
                         gts[session][modality] = []
                         preds[session][modality] = []
 
-                    # Truncate ground truth to match prediction length
-                    gt_truncated = y_trial[modality][
-                        :, : trial_pred[modality].shape[1]
-                    ]
-
                     gts[session][modality].append(
-                        gt_truncated.detach().cpu().numpy()
+                        y_trial[modality].detach().cpu().numpy()
                     )
                     preds[session][modality].append(
                         trial_pred[modality].detach().cpu().numpy()
                     )
 
-    # Stack arrays for each modality and session
     stacked_gts = {}
     stacked_preds = {}
     for session in gts:
@@ -155,11 +135,11 @@ def iterate_entire_trials(
         stacked_preds[session] = {}
         for modality in gts[session]:
             stacked_gts[session][modality] = np.concatenate(
-                gts[session][modality], axis=0
-            )
+                gts[session][modality], axis=1
+            ).squeeze(0)
             stacked_preds[session][modality] = np.concatenate(
-                preds[session][modality], axis=0
-            )
+                preds[session][modality], axis=1
+            ).squeeze(0)
 
     track_metrics = {}
     if metric is not None:
@@ -211,7 +191,8 @@ def iterate(
     with torch.set_grad_enabled(is_train):
         for session in dataloaders:
             for x_trial, y_trial in dataloaders[session]:
-                x_trial = x_trial.to(utils.DEVICE)
+                x_trial = {k: v.to(utils.DEVICE) for k, v in x_trial.items()}
+                y_trial = {k: v.to(utils.DEVICE) for k, v in y_trial.items()}
                 pred = model(x_trial, session)
 
                 for modality in y_trial.keys():
@@ -232,7 +213,6 @@ def iterate(
                     optimizer.step()
                     losses.append(loss.item())
 
-        # Stack arrays for each modality and session
         stacked_gts = {}
         stacked_preds = {}
         for session in gts:
@@ -247,8 +227,6 @@ def iterate(
                 )
 
         if metric is not None:
-            # metric is now a dict, e.g., {'position': 'correlation', 'spikes': 'mse'}
-            # stacked_gts and stacked_preds already have the correct format: {session: {modality: np.ndarray}}
             computed_metrics = metrics.compute(
                 stacked_gts, stacked_preds, metric
             )
@@ -258,8 +236,6 @@ def iterate(
             track_metrics["loss"] = np.mean(losses)
 
         if is_train:
-            from motorlab.model.factory import compute_mean
-
             track_metrics["grad_norm"] = torch.nn.utils.clip_grad_norm_(
                 model.parameters(), max_norm=float("inf")
             ).item()

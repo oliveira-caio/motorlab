@@ -27,7 +27,6 @@ def compute(gts: dict, preds: dict, metrics: dict):
     results = {}
 
     for modality, metric_name in metrics.items():
-        # Collect arrays for this modality across all sessions
         gt_arrays = [gts[session][modality] for session in gts.keys()]
         pred_arrays = [preds[session][modality] for session in preds.keys()]
 

@@ -3,6 +3,7 @@ ipympl
 lipstick
 matplotlib
 numpy
+plotly
 pyyaml
 seaborn
 scikit-learn

@@ -59,6 +59,11 @@ class LabeledInterval:
             f"type={self.type}, tier={self.tier})"
         )
 
+    def __iter__(self):
+        """Allow unpacking like (start, end) = interval."""
+        yield self.start
+        yield self.end
+
 
 def _should_include_interval(
     interval_info: dict, include_trial: bool, include_homing: bool
@@ -205,7 +210,7 @@ def load_all(
         intervals_dir = data_dir / session / "intervals"
 
         for interval_file in sorted(intervals_dir.iterdir()):
-            with interval_file.open() as f:
+            with interval_file.open("r") as f:
                 interval_info = yaml.safe_load(f)
 
             if not _should_include_interval(

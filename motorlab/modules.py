@@ -3,7 +3,7 @@ import torch
 
 class Readout(torch.nn.Module):
     """
-    Flexible module for multiple session-specific readouts with configurable activation types.
+    Module for a multimodal, session-specific readout.
 
     Parameters
     ----------
@@ -15,7 +15,7 @@ class Readout(torch.nn.Module):
         Output dimensions for each session and each readout name.
         Example: { 'session1': { 'linear': 2, 'softplus': 3 }, ... }
     readout_map : dict[str, str]
-        Mapping from readout name to activation type ('linear', 'softplus', etc).
+        Mapping from readout name to activation type.
         Example: { 'linear': 'linear', 'softplus': 'softplus' }
     n_directions : int, optional
         Number of directions (for bidirectional models). Default is 1.
@@ -30,6 +30,8 @@ class Readout(torch.nn.Module):
         n_directions: int = 1,
     ) -> None:
         super().__init__()
+
+        self.modalities = list(readout_map.keys())
 
         self.readouts = torch.nn.ModuleDict({})
         for session in sessions:
@@ -54,111 +56,174 @@ class Readout(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, session: str) -> dict:
         return {
-            modality: readout(x)
-            for modality, readout in self.readouts[session].items()
+            modality: getattr(self.readouts[session], modality)(x)
+            for modality in self.modalities
         }
 
 
 class LinearEmbedding(torch.nn.Module):
     """
-    Module for a session-specific linear embedding layer.
+    Module for a multimodal, session-specific linear embedding.
+
+    This module takes a dictionary of modality tensors, passes each through its
+    respective embedding layer, and sums all embeddings to produce a single
+    output tensor. Notice that the embedding dimension should be the same for
+    all modalities.
 
     Parameters
     ----------
     sessions : list[str]
         List of session names.
-    in_dim : dict[str, int]
-        Input dimension for each session.
+    in_dim : dict[str, dict[str, int]]
+        Input dimensions for each session and modality.
+        Example: {'session1': {'poses': 32, 'spikes': 128}, ...}
     embedding_dim : int
-        Embedding dimension size.
-    """
-
-    def __init__(
-        self, sessions: list[str], in_dim: dict[str, int], embedding_dim: int
-    ) -> None:
-        super().__init__()
-        self.linear = torch.nn.ModuleDict(
-            {
-                session: torch.nn.Linear(
-                    in_dim[session],
-                    embedding_dim,
-                )
-                for session in sessions
-            }
-        )
-
-    def forward(self, x: torch.Tensor, session: str) -> torch.Tensor:
-        return self.linear[session](x)
-
-
-class LinRegModel(torch.nn.Module):
-    """
-    Linear regression model with session-specific readout layers.
-
-    Parameters
-    ----------
-    sessions : list[str]
-        List of session names.
-    in_dim : dict[str, int]
-        Input dimension for each session.
-    out_dim : dict[str, int]
-        Output dimension for each session.
+        Embedding dimension size (same for all modalities).
     """
 
     def __init__(
         self,
         sessions: list[str],
-        in_dim: dict[str, int],
-        out_dim: dict[str, int],
+        in_dim: dict[str, dict[str, int]],
+        embedding_dim: int,
     ) -> None:
         super().__init__()
-        self.readout = torch.nn.ModuleDict(
-            {
-                session: torch.nn.Linear(
-                    in_dim[session],
-                    out_dim[session],
+
+        self.modalities = list(in_dim[sessions[0]].keys())
+
+        self.linear = torch.nn.ModuleDict()
+        for session in sessions:
+            session_dict = {}
+            for modality, dim in in_dim[session].items():
+                session_dict[modality] = torch.nn.Linear(dim, embedding_dim)
+            self.linear[session] = torch.nn.ModuleDict(session_dict)
+
+    def forward(self, x: dict[str, torch.Tensor], session: str) -> torch.Tensor:
+        """
+        Forward pass that sums embeddings across modalities.
+
+        Parameters
+        ----------
+        x : dict[str, torch.Tensor]
+            Dictionary mapping modality names to input tensors
+        session : str
+            Session identifier
+
+        Returns
+        -------
+        torch.Tensor
+            Summed embedding across all modalities
+        """
+        return torch.stack(
+            [
+                getattr(self.linear[session], modality)(x[modality])
+                for modality in self.modalities
+            ]
+        ).sum(dim=0)
+
+
+class LinRegModel(torch.nn.Module):
+    """
+    Linear regression model with session-specific layers.
+
+    This model takes a dictionary of input modalities, concatenates them along
+    the last dimension, and produces multiple output modalities through separate
+    linear layers per session.
+
+    Parameters
+    ----------
+    sessions : list[str]
+        List of session names.
+    in_dim : dict[str, dict[str, int]]
+        Input dimensions for each session and modality.
+        Example: {'session1': {'poses': 32, 'spikes': 128}, ...}
+    out_dim : dict[str, dict[str, int]]
+        Output dimensions for each session and modality.
+        Example: {'session1': {'position': 2, 'velocity': 2}, ...}
+    """
+
+    def __init__(
+        self,
+        sessions: list[str],
+        in_dim: dict[str, dict[str, int]],
+        out_dim: dict[str, dict[str, int]],
+    ) -> None:
+        super().__init__()
+
+        self.out_modalities = list(out_dim[sessions[0]].keys())
+
+        self.linear = torch.nn.ModuleDict()
+        for session in sessions:
+            session_dict = {}
+            for out_modality in out_dim[session]:
+                session_dict[out_modality] = torch.nn.Linear(
+                    sum(in_dim[session].values()),
+                    out_dim[session][out_modality],
                 )
-                for session in sessions
-            }
-        )
+            self.linear[session] = torch.nn.ModuleDict(session_dict)
 
     def forward(
-        self, x: torch.Tensor, session: str, modality: str = "output"
-    ) -> dict:
-        return {modality: self.readout[session](x)}
+        self, x: dict[str, torch.Tensor], session: str
+    ) -> dict[str, torch.Tensor]:
+        """
+        Forward pass: concatenate inputs, then compute outputs.
+
+        Parameters
+        ----------
+        x : dict[str, torch.Tensor]
+            Dictionary mapping modality names to input tensors
+        session : str
+            Session identifier
+
+        Returns
+        -------
+        dict[str, torch.Tensor]
+            Dictionary mapping output modality names to predicted tensors
+        """
+        x_cat = torch.cat(list(x.values()), dim=-1)
+
+        return {
+            modality: getattr(self.linear[session], modality)(x_cat)
+            for modality in self.out_modalities
+        }
 
 
 class FCModel(torch.nn.Module):
     """
     Fully connected feedforward model with configurable layers and readout.
 
+    This model takes a dictionary of input modalities, embeds each modality
+    separately and sums them, then passes through fully connected layers
+    to produce multiple output modalities. If you want the modalities to be concatenated, take a look at datasets.py.
+
     Parameters
     ----------
     sessions : list[str]
         List of session names.
-    in_dim : dict[str, int]
-        Input dimension for each session.
+    in_dim : dict[str, dict[str, int]]
+        Input dimensions for each session and modality.
+        Example: {'session1': {'poses': 32, 'spikes': 128}, ...}
     embedding_dim : int
         Embedding dimension size.
     hidden_dim : int
         Hidden dimension size.
-    out_dim : dict[str, int]
-        Output dimension for each session.
+    out_dim : dict[str, dict[str, int]]
+        Output dimension for each session and modality.
     n_layers : int, optional
         Number of hidden layers. Default is 1.
-    readout_type : str, optional
-        Type of readout ('softplus' or 'linear'). Default is 'linear'.
+    readout_map : dict[str, str]
+        Mapping from modality to readout type.
     """
 
     def __init__(
         self,
         sessions: list[str],
-        in_dim: dict[str, int],
+        in_dim: dict[str, dict[str, int]],
         embedding_dim: int,
         hidden_dim: int,
-        out_dim: dict,
+        out_dim: dict[str, dict[str, int]],
         n_layers: int,
-        readout_map: dict,
+        readout_map: dict[str, str],
     ) -> None:
         super().__init__()
         self.embedding = LinearEmbedding(sessions, in_dim, embedding_dim)
@@ -189,7 +254,9 @@ class FCModel(torch.nn.Module):
             n_directions=1,
         )
 
-    def forward(self, x: torch.Tensor, session: str) -> dict:
+    def forward(
+        self, x: dict[str, torch.Tensor], session: str
+    ) -> dict[str, torch.Tensor]:
         y = self.embedding(x, session)
         for layer in self.core:
             y = layer(y)
@@ -205,33 +272,33 @@ class GRUModel(torch.nn.Module):
     ----------
     sessions : list[str]
         List of session names.
-    in_dim : dict[str, int]
-        Input dimension for each session.
+    in_dim : dict[str, dict[str, int]]
+        Input dimension for each session and modality.
     embedding_dim : int
         Embedding dimension size.
     hidden_dim : int
         Hidden dimension size.
-    out_dim : dict[str, int]
-        Output dimension for each session.
+    out_dim : dict[str, dict[str, int]]
+        Output dimension for each session and modality.
     n_layers : int, optional
         Number of GRU layers. Default is 1.
+    readout_map : dict[str, str]
+        Mapping from modality to readout type.
     dropout : float, optional
         Dropout rate. Default is 0.0.
     bidirectional : bool, optional
         Whether to use bidirectional GRU. Default is True.
-    readout_type : str, optional
-        Type of readout ('softplus' or 'linear'). Default is 'linear'.
     """
 
     def __init__(
         self,
         sessions: list[str],
-        in_dim: dict[str, int],
+        in_dim: dict[str, dict[str, int]],
         embedding_dim: int,
         hidden_dim: int,
-        out_dim: dict,
+        out_dim: dict[str, dict[str, int]],
         n_layers: int,
-        readout_map: dict,
+        readout_map: dict[str, str],
         dropout: float = 0.0,
         bidirectional: bool = True,
     ) -> None:
@@ -255,7 +322,9 @@ class GRUModel(torch.nn.Module):
             n_directions=n_directions,
         )
 
-    def forward(self, x: torch.Tensor, session: str) -> dict:
+    def forward(
+        self, x: dict[str, torch.Tensor], session: str
+    ) -> dict[str, torch.Tensor]:
         y = self.embedding(x, session)
         y = self.core(y)[0]
         out = self.readout(y, session)
@@ -304,14 +373,16 @@ class DictLoss(torch.nn.Module):
                 raise ValueError(f"loss function {loss_name} not implemented.")
             self.loss_fns[modality] = loss_dict[loss_name]
 
-    def forward(self, outputs: dict, targets: dict) -> torch.Tensor:
+    def forward(
+        self, outputs: dict[str, torch.Tensor], targets: dict[str, torch.Tensor]
+    ) -> torch.Tensor:
         """
         Compute total loss across all modalities.
 
         Parameters
         ----------
         outputs : dict
-            Dictionary of modality -> predicted tensor from MultiReadout
+            Dictionary of modality -> predicted tensor from Readout
         targets : dict
             Dictionary of modality -> target tensor
 

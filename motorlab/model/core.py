@@ -2,9 +2,22 @@ import datetime
 
 import torch
 
-from motorlab import data, datasets, intervals, utils, modules
+from motorlab import (
+    data,
+    datasets,
+    intervals,
+    utils,
+    modules,
+    config as config_module,
+)
 from motorlab.model.training import iterate, iterate_entire_trials, loop, track
-from motorlab.model.factory import create, load, save_config, save_checkpoint
+from motorlab.model.factory import (
+    compute_dimensions,
+    create,
+    load,
+    save_config,
+    save_checkpoint,
+)
 
 
 def setup(
@@ -28,56 +41,57 @@ def setup(
         Tuple containing (model, data_dict, loss_fns)
     """
     utils.fix_seed(config.get("seed", 0))
-    in_modalities = utils.list_modalities(config["in_modalities"])
-    out_modalities = utils.list_modalities(config["out_modalities"])
 
     data_dict = data.load_all(
         data_dir=config["data_dir"],
         sessions=config["sessions"],
-        in_modalities=in_modalities,
-        out_modalities=out_modalities,
+        in_modalities=config["in_modalities"],
+        out_modalities=config["out_modalities"],
         experiment=config.get("experiment", "gbyk"),
-        poses_config=config.get("poses", None),
-        position_config=config.get("position", None),
-        kinematics_config=config.get("kinematics", None),
-        spikes_config=config.get("spikes", None),
+        poses_config=config.get("poses", dict()),
+        position_config=config.get("position", dict()),
+        kinematics_config=config.get("kinematics", dict()),
+        spikes_config=config.get("spikes", dict()),
         train_intervals=train_intervals,
     )
 
     model_dict = config["model"].copy()
 
     if is_train:
-        model_dict["in_dim"] = {
-            session: sum(
-                [data_dict[session][m].shape[1] for m in in_modalities]
-            )
-            for session in config["sessions"]
-        }
+        # Use centralized dimension computation
+        in_dim, out_dim = compute_dimensions(
+            data_dict=data_dict,
+            in_modalities=config["in_modalities"],
+            out_modalities=config["out_modalities"],
+            sessions=config["sessions"],
+            concat_input=config["dataset"].get("concat_input", True),
+            concat_output=config["dataset"].get("concat_output", True),
+            n_classes=config["model"].get("n_classes", None),
+        )
 
-        if "n_classes" in config["model"]:
-            model_dict["out_dim"] = {
-                session: config["model"]["n_classes"]
-                for session in config["sessions"]
-            }
-        else:
-            model_dict["out_dim"] = {
-                session: sum(
-                    [data_dict[session][m].shape[1] for m in out_modalities]
-                )
-                for session in config["sessions"]
-            }
+        model_dict["in_dim"] = in_dim
+        model_dict["out_dim"] = out_dim
 
     checkpoint_dir = config.get("checkpoint_dir", "checkpoint/")
     uid = config.get("uid", None)
 
     if uid is not None:
-        if not model_dict.get("out_dim"):
-            model_dict["out_dim"] = {
-                session: sum(
-                    [data_dict[session][m].shape[1] for m in out_modalities]
-                )
-                for session in config["sessions"]
-            }
+        # Compute missing dimensions using centralized function
+        if not model_dict.get("in_dim") or not model_dict.get("out_dim"):
+            in_dim, out_dim = compute_dimensions(
+                data_dict=data_dict,
+                in_modalities=config["in_modalities"],
+                out_modalities=config["out_modalities"],
+                sessions=config["sessions"],
+                concat_input=config["dataset"].get("concat_input", True),
+                concat_output=config["dataset"].get("concat_output", True),
+                n_classes=config["model"].get("n_classes", None),
+            )
+
+            if not model_dict.get("in_dim"):
+                model_dict["in_dim"] = in_dim
+            if not model_dict.get("out_dim"):
+                model_dict["out_dim"] = out_dim
 
         if uid is None:
             raise ValueError("uid must be provided when loading checkpoint")
@@ -102,13 +116,9 @@ def setup(
             is_train=is_train,
         )
 
-    if isinstance(config["loss_fn"], str):
-        loss_map = {out_modalities[0]: config["loss_fn"]}
-    else:
-        loss_map = config["loss_fn"]
-
     loss_fns = {
-        session: modules.DictLoss(loss_map) for session in config["sessions"]
+        session: modules.DictLoss(config["loss_fn"])
+        for session in config["sessions"]
     }
 
     if is_train:
@@ -142,6 +152,8 @@ def train(config: dict) -> None:
         - train: Training parameters (lr, n_epochs)
         - loss_fn: Loss function specification
     """
+    config = config_module.preprocess(config)
+
     test_intervals, train_intervals, valid_intervals = intervals.load_by_tiers(
         data_dir=config["data_dir"],
         sessions=config["sessions"],
@@ -158,14 +170,15 @@ def train(config: dict) -> None:
     train_datasets = datasets.load_datasets(
         data_dict,
         train_intervals,
-        utils.list_modalities(config["in_modalities"]),
-        utils.list_modalities(config["out_modalities"]),
+        config["in_modalities"],
+        config["out_modalities"],
         entire_trials=config["dataset"].get("entire_trials", False),
         seq_length=config["dataset"].get("seq_length", 20),
         stride=config["dataset"].get("stride", 20),
         concat_input=config["dataset"].get("concat_input", True),
         concat_output=config["dataset"].get("concat_output", True),
     )
+
     train_dataloaders = datasets.load_dataloaders(
         train_datasets,
         batch_size=config["dataset"].get("batch_size", 64),
@@ -175,14 +188,15 @@ def train(config: dict) -> None:
     valid_datasets = datasets.load_datasets(
         data_dict,
         valid_intervals,
-        utils.list_modalities(config["in_modalities"]),
-        utils.list_modalities(config["out_modalities"]),
+        config["in_modalities"],
+        config["out_modalities"],
         entire_trials=config["dataset"].get("entire_trials", False),
         seq_length=config["dataset"].get("seq_length", 20),
         stride=config["dataset"].get("stride", 20),
         concat_input=config["dataset"].get("concat_input", True),
         concat_output=config["dataset"].get("concat_output", True),
     )
+
     valid_dataloaders = datasets.load_dataloaders(
         valid_datasets,
         batch_size=config["dataset"].get("batch_size", 64),
@@ -190,16 +204,14 @@ def train(config: dict) -> None:
     )
 
     optimizer = torch.optim.Adam(
-        model.parameters(), lr=config["train"].get("lr", 1e-3)
-    )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=config["train"].get("n_epochs", 400)
+        model.parameters(), lr=config["training"].get("lr", 1e-3)
     )
 
-    metric = config.get("metric", None)
-    if isinstance(metric, str):
-        out_modalities = utils.list_modalities(config["out_modalities"])
-        metric = {modality: metric for modality in out_modalities}
+    scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer,
+        step_size=config["training"].get("step_size", 25),
+        gamma=config["training"].get("gamma", 0.1),
+    )
 
     def track_wrapper(metrics):
         return track(metrics, config, model)
@@ -213,8 +225,8 @@ def train(config: dict) -> None:
         loss_fns,
         optimizer,
         scheduler,
-        metric,
-        config["train"].get("n_epochs", 400),
+        config["metric"],
+        config["training"].get("n_epochs", 400),
         track_fn,
     )
 
@@ -251,6 +263,8 @@ def evaluate(config: dict) -> tuple[dict, dict, dict]:
         - ground_truths: Dict mapping sessions to ground truth arrays
         - predictions: Dict mapping sessions to prediction arrays
     """
+    config = config_module.preprocess(config)
+
     test_intervals, train_intervals, valid_intervals = intervals.load_by_tiers(
         data_dir=config["data_dir"],
         sessions=config["sessions"],
@@ -263,27 +277,24 @@ def evaluate(config: dict) -> tuple[dict, dict, dict]:
     )
 
     model, data_dict, loss_fns = setup(config, train_intervals, is_train=False)
+
     test_datasets = datasets.load_datasets(
         data_dict,
         test_intervals,
-        utils.list_modalities(config["in_modalities"]),
-        utils.list_modalities(config["out_modalities"]),
+        config["in_modalities"],
+        config["out_modalities"],
         entire_trials=config["dataset"].get("entire_trials", False),
         seq_length=config["dataset"].get("seq_length", 20),
         stride=config["dataset"].get("stride", 20),
         concat_input=config["dataset"].get("concat_input", True),
         concat_output=config["dataset"].get("concat_output", True),
     )
+
     test_dataloaders = datasets.load_dataloaders(
         test_datasets,
         batch_size=config["dataset"].get("batch_size", 64),
         shuffle=False,
     )
-
-    metric = config.get("metric", None)
-    if isinstance(metric, str):
-        out_modalities = utils.list_modalities(config["out_modalities"])
-        metric = {modality: metric for modality in out_modalities}
 
     if not config["dataset"].get("entire_trials", False):
         metrics, gts, preds = iterate(
@@ -291,14 +302,14 @@ def evaluate(config: dict) -> tuple[dict, dict, dict]:
             test_dataloaders,
             loss_fns,
             optimizer=None,
-            metric=metric,
+            metric=config["metric"],
         )
     else:
         metrics, gts, preds = iterate_entire_trials(
             model,
             test_dataloaders,
             config["dataset"].get("seq_length", 20),
-            metric=metric,
+            metric=config["metric"],
         )
 
     return metrics, gts, preds

@@ -1,10 +1,10 @@
 import warnings
-
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import plotly.graph_objs as go
+import plotly.graph_objects
 import seaborn as sns
 import umap
 
@@ -12,6 +12,9 @@ from lipstick import GifMaker, update_fig
 from sklearn.metrics import confusion_matrix as sklearn_cm
 
 from motorlab import data, intervals, metrics, room, utils
+
+JOINT_SIZE = 4
+LINE_WIDTH = 6
 
 
 def confusion_matrix(
@@ -23,7 +26,12 @@ def confusion_matrix(
     save_path: str | None = None,
 ) -> None:
     """
-        Plot confusion matrices for predictions vs. ground truth for each session.
+         if save_path:
+        # Only support HTML export
+        if not save_path.lower().endswith('.html'):
+            save_path = save_path + '.html'
+        fig.write_html(save_path)
+        print(f"Saved interactive plot as HTML: {save_path}")n matrices for predictions vs. ground truth for each session.
 
         Parameters
         ----------
@@ -278,7 +286,7 @@ def poses3d(
         fig = plt.figure()
         ax = fig.add_subplot(111, projection="3d")
 
-        for s, e in utils.SKELETON:
+        for s, e in utils.SKELETON["normal"]:
             x = [
                 pose[utils.KEYPOINTS[experiment][s], 0],
                 pose[utils.KEYPOINTS[experiment][e], 0],
@@ -473,3 +481,253 @@ def umap3d(
         fig.write_html(plot_filename)
     if show:
         fig.show()
+
+
+def poses3d_improved(
+    poses: np.ndarray,
+    experiment: str = "gbyk",
+    save_path: str | None = None,
+    return_fig: bool = False,
+    fps: int = 50,
+    color_scheme: str = "default",
+) -> plotly.graph_objects.Figure | None:
+    """
+    Enhanced 3D human pose visualization using Plotly with improved features.
+
+    Parameters
+    ----------
+    poses : np.ndarray
+        Pose data with shape (n_frames, n_keypoints*3) or (n_keypoints*3,) for single pose
+    experiment : str, optional
+        Experiment type for keypoint mapping. Default is "gbyk".
+    save_path : str, optional
+        Path to save the figure as HTML. Default is None.
+    return_fig : bool, optional
+        Whether to return figure object. Default is False.
+    fps : int, optional
+        Frames per second for animations. Default is 50.
+    color_scheme : str, optional
+        Color scheme: 'default', 'rainbow', 'body_parts'. Default is 'default'.
+
+    Returns
+    -------
+    plotly.graph_objects.Figure | None
+        Figure object if return_fig=True, otherwise None.
+    """
+    max_frames = 500
+    view = {
+        "xlim": (-0.5, 0.5),
+        "ylim": (-0.5, 0.5),
+        "zlim": (-1, 1),
+    }
+
+    poses = _validate_and_reshape_poses(poses, experiment)
+    n_frames = len(poses)
+
+    if n_frames > max_frames:
+        warnings.warn(
+            f"Too many frames ({n_frames}), truncating to {max_frames}"
+        )
+        poses = poses[:max_frames]
+        n_frames = max_frames
+
+    skeleton = [
+        (
+            utils.KEYPOINTS[experiment][pair[0]],
+            utils.KEYPOINTS[experiment][pair[1]],
+        )
+        for pair in utils.SKELETON["normal"]
+    ]
+
+    bone_colors = _create_color_scheme(color_scheme, skeleton)
+
+    fig = plotly.graph_objects.Figure()
+
+    if n_frames == 1:
+        _add_pose_to_plotly(
+            fig,
+            poses[0],
+            skeleton,
+            bone_colors,
+        )
+    else:
+        frames = []
+        for frame_idx, pose in enumerate(poses):
+            frame_data = []
+            _add_pose_data_to_frame(
+                frame_data,
+                pose,
+                skeleton,
+                bone_colors,
+            )
+            frames.append(
+                plotly.graph_objects.Frame(data=frame_data, name=str(frame_idx))
+            )
+
+        if frames:
+            fig.add_traces(frames[0].data)
+
+        fig.frames = frames
+
+        fig.update_layout(
+            # Remove control buttons for clean auto-play
+            updatemenus=[]
+        )
+
+    fig.update_layout(
+        scene=dict(
+            xaxis=dict(range=view["xlim"], title="X", showbackground=False),
+            yaxis=dict(range=view["ylim"], title="Y", showbackground=False),
+            zaxis=dict(range=view["zlim"], title="Z", showbackground=False),
+            camera=dict(eye=dict(x=1.0, y=1.0, z=1.0)),
+            aspectmode="cube",
+        ),
+        title="3D Pose Visualization",
+        showlegend=False,
+    )
+
+    if save_path:
+        # Only support HTML export
+        if not save_path.lower().endswith(".html"):
+            save_path = save_path + ".html"
+        fig.write_html(save_path)
+        print(f"Saved interactive plot as HTML: {save_path}")
+
+    fig.show()
+
+    if return_fig:
+        return fig
+
+    return None
+
+
+def _create_color_scheme(
+    color_scheme: str,
+    skeleton: list,
+) -> list:
+    """Create color schemes for bones and joints for plotly."""
+    if color_scheme == "body_parts":
+        bone_colors = []
+        for i in range(len(skeleton)):
+            if i < len(skeleton) // 3:
+                bone_colors.append("red")  # Upper body
+            elif i < 2 * len(skeleton) // 3:
+                bone_colors.append("green")  # Middle body
+            else:
+                bone_colors.append("blue")  # Lower body
+    else:
+        bone_colors = ["blue"] * len(skeleton)
+
+    return bone_colors
+
+
+def _add_pose_to_plotly(
+    fig,
+    pose,
+    skeleton,
+    bone_colors,
+):
+    """Add a single pose to plotly figure."""
+    for (start_idx, end_idx), color in zip(skeleton, bone_colors):
+        x = [pose[start_idx, 0], pose[end_idx, 0]]
+        y = [pose[start_idx, 1], pose[end_idx, 1]]
+        z = [pose[start_idx, 2], pose[end_idx, 2]]
+
+        fig.add_trace(
+            plotly.graph_objects.Scatter3d(
+                x=x,
+                y=y,
+                z=z,
+                mode="lines",
+                line=dict(color=color, width=LINE_WIDTH),
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
+
+    fig.add_trace(
+        plotly.graph_objects.Scatter3d(
+            x=pose[:, 0],
+            y=pose[:, 1],
+            z=pose[:, 2],
+            mode="markers",
+            marker=dict(
+                size=JOINT_SIZE,
+                color="black",
+            ),
+            showlegend=False,
+            hoverinfo="text",
+            text=[f"Joint {i}" for i in range(len(pose))],
+            name="Joints",
+        )
+    )
+
+
+def _add_pose_data_to_frame(
+    frame_data,
+    pose,
+    skeleton,
+    bone_colors,
+):
+    """Add pose data to animation frame."""
+    for (start_idx, end_idx), color in zip(skeleton, bone_colors):
+        x = [pose[start_idx, 0], pose[end_idx, 0]]
+        y = [pose[start_idx, 1], pose[end_idx, 1]]
+        z = [pose[start_idx, 2], pose[end_idx, 2]]
+
+        frame_data.append(
+            plotly.graph_objects.Scatter3d(
+                x=x,
+                y=y,
+                z=z,
+                mode="lines",
+                line=dict(color=color, width=LINE_WIDTH),
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
+
+    frame_data.append(
+        plotly.graph_objects.Scatter3d(
+            x=pose[:, 0],
+            y=pose[:, 1],
+            z=pose[:, 2],
+            mode="markers",
+            marker=dict(
+                size=JOINT_SIZE,
+                color="black",
+            ),
+            showlegend=False,
+            hoverinfo="text",
+            text=[f"Joint {i}" for i in range(len(pose))],
+        )
+    )
+
+
+def _validate_and_reshape_poses(
+    poses: np.ndarray, experiment: str
+) -> np.ndarray:
+    """Validate and reshape pose data to (n_frames, n_keypoints, 3)."""
+    expected_keypoints = len(utils.KEYPOINTS[experiment])
+
+    if poses.ndim == 1:
+        if len(poses) != expected_keypoints * 3:
+            raise ValueError(
+                f"Expected {expected_keypoints * 3} values for single pose, got {len(poses)}"
+            )
+        poses = poses.reshape(1, expected_keypoints, 3)
+    elif poses.ndim == 2:
+        if poses.shape[1] != expected_keypoints * 3:
+            raise ValueError(
+                f"Expected {expected_keypoints * 3} features per frame, got {poses.shape[1]}"
+            )
+        poses = poses.reshape(poses.shape[0], expected_keypoints, 3)
+    elif poses.ndim == 3:
+        if poses.shape[1] != expected_keypoints or poses.shape[2] != 3:
+            raise ValueError(
+                f"Expected shape (n_frames, {expected_keypoints}, 3), got {poses.shape}"
+            )
+    else:
+        raise ValueError(f"Invalid pose data shape: {poses.shape}")
+
+    return poses

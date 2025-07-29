@@ -5,6 +5,8 @@ import torch
 
 from sklearn.decomposition import PCA
 
+from motorlab.intervals import LabeledInterval
+
 
 if torch.cuda.is_available():
     DEVICE = torch.device("cuda")
@@ -134,111 +136,111 @@ EXTRA_KEYPOINTS_IDXS = {
 
 SKELETON = {
     "normal": [
-        ["S_tail", "E_tail"],
-        ["S_tail", "L_hip"],
-        ["S_tail", "R_hip"],
-        ["R_knee", "R_hip"],
-        ["R_knee", "R_ankle"],
-        ["L_knee", "L_hip"],
-        ["L_knee", "L_ankle"],
-        ["R_elbow", "R_shoulder"],
-        ["R_elbow", "R_wrist"],
-        ["L_elbow", "L_shoulder"],
-        ["L_elbow", "L_wrist"],
-        ["neck", "S_tail"],
-        ["neck", "head"],
-        ["neck", "nose"],
-        ["neck", "L_shoulder"],
-        ["neck", "R_shoulder"],
-        ["neck", "L_ear"],
-        ["neck", "R_ear"],
-        ["nose", "L_eye"],
-        ["nose", "R_eye"],
-        ["nose", "L_ear"],
-        ["nose", "R_ear"],
-        ["head", "L_ear"],
-        ["head", "R_ear"],
-        ["head", "L_eye"],
-        ["head", "R_eye"],
+        ("s_tail", "e_tail"),
+        ("s_tail", "l_hip"),
+        ("s_tail", "r_hip"),
+        ("r_knee", "r_hip"),
+        ("r_knee", "r_ankle"),
+        ("l_knee", "l_hip"),
+        ("l_knee", "l_ankle"),
+        ("r_elbow", "r_shoulder"),
+        ("r_elbow", "r_wrist"),
+        ("l_elbow", "l_shoulder"),
+        ("l_elbow", "l_wrist"),
+        ("neck", "s_tail"),
+        ("neck", "head"),
+        ("neck", "nose"),
+        ("neck", "l_shoulder"),
+        ("neck", "r_shoulder"),
+        ("neck", "l_ear"),
+        ("neck", "r_ear"),
+        ("nose", "l_eye"),
+        ("nose", "r_eye"),
+        ("nose", "l_ear"),
+        ("nose", "r_ear"),
+        ("head", "l_ear"),
+        ("head", "r_ear"),
+        ("head", "l_eye"),
+        ("head", "r_eye"),
     ],
     "reduced": [
-        ["S_tail", "E_tail"],
-        ["S_tail", "L_hip"],
-        ["S_tail", "R_hip"],
-        ["R_knee", "R_hip"],
-        ["R_knee", "R_ankle"],
-        ["L_knee", "L_hip"],
-        ["L_knee", "L_ankle"],
-        ["R_elbow", "R_shoulder"],
-        ["R_elbow", "R_wrist"],
-        ["L_elbow", "L_shoulder"],
-        ["L_elbow", "L_wrist"],
-        ["neck", "S_tail"],
-        ["neck", "nose"],
-        ["neck", "L_shoulder"],
-        ["neck", "R_shoulder"],
-        ["neck", "L_ear"],
-        ["neck", "R_ear"],
-        ["nose", "L_ear"],
-        ["nose", "R_ear"],
+        ("s_tail", "e_tail"),
+        ("s_tail", "l_hip"),
+        ("s_tail", "r_hip"),
+        ("r_knee", "r_hip"),
+        ("r_knee", "r_ankle"),
+        ("l_knee", "l_hip"),
+        ("l_knee", "l_ankle"),
+        ("r_elbow", "r_shoulder"),
+        ("r_elbow", "r_wrist"),
+        ("l_elbow", "l_shoulder"),
+        ("l_elbow", "l_wrist"),
+        ("neck", "s_tail"),
+        ("neck", "nose"),
+        ("neck", "l_shoulder"),
+        ("neck", "r_shoulder"),
+        ("neck", "l_ear"),
+        ("neck", "r_ear"),
+        ("nose", "l_ear"),
+        ("nose", "r_ear"),
     ],
     "extended": [
-        ["M_tail", "E_tail"],
-        ["M_tail", "S_tail"],
-        ["S_tail", "spine"],
-        ["S_tail", "L_hip"],
-        ["S_tail", "R_hip"],
-        ["R_upperLeg", "R_hip"],
-        ["R_upperLeg", "R_knee"],
-        ["R_lowerLeg", "R_knee"],
-        ["R_lowerLeg", "R_ankle"],
-        ["L_upperLeg", "L_hip"],
-        ["L_upperLeg", "L_knee"],
-        ["L_lowerLeg", "L_knee"],
-        ["L_lowerLeg", "L_ankle"],
-        ["R_upperArm", "R_shoulder"],
-        ["R_upperArm", "R_elbow"],
-        ["R_lowerArm", "R_elbow"],
-        ["R_lowerArm", "R_wrist"],
-        ["L_upperArm", "L_shoulder"],
-        ["L_upperArm", "L_elbow"],
-        ["L_lowerArm", "L_elbow"],
-        ["L_lowerArm", "L_wrist"],
-        ["neck", "spine"],
-        ["neck", "head"],
-        ["neck", "nose"],
-        ["neck", "L_shoulder"],
-        ["neck", "R_shoulder"],
-        ["neck", "L_ear"],
-        ["neck", "R_ear"],
-        ["nose", "L_eye"],
-        ["nose", "R_eye"],
-        ["nose", "L_ear"],
-        ["nose", "R_ear"],
-        ["head", "L_ear"],
-        ["head", "R_ear"],
-        ["head", "L_eye"],
-        ["head", "R_eye"],
+        ("m_tail", "e_tail"),
+        ("m_tail", "s_tail"),
+        ("s_tail", "spine"),
+        ("s_tail", "l_hip"),
+        ("s_tail", "r_hip"),
+        ("r_upperleg", "r_hip"),
+        ("r_upperleg", "r_knee"),
+        ("r_lowerleg", "r_knee"),
+        ("r_lowerleg", "r_ankle"),
+        ("l_upperleg", "l_hip"),
+        ("l_upperleg", "l_knee"),
+        ("l_lowerleg", "l_knee"),
+        ("l_lowerleg", "l_ankle"),
+        ("r_upperarm", "r_shoulder"),
+        ("r_upperarm", "r_elbow"),
+        ("r_lowerarm", "r_elbow"),
+        ("r_lowerarm", "r_wrist"),
+        ("l_upperarm", "l_shoulder"),
+        ("l_upperarm", "l_elbow"),
+        ("l_lowerarm", "l_elbow"),
+        ("l_lowerarm", "l_wrist"),
+        ("neck", "spine"),
+        ("neck", "head"),
+        ("neck", "nose"),
+        ("neck", "l_shoulder"),
+        ("neck", "r_shoulder"),
+        ("neck", "l_ear"),
+        ("neck", "r_ear"),
+        ("nose", "l_eye"),
+        ("nose", "r_eye"),
+        ("nose", "l_ear"),
+        ("nose", "r_ear"),
+        ("head", "l_ear"),
+        ("head", "r_ear"),
+        ("head", "l_eye"),
+        ("head", "r_eye"),
     ],
 }
 
 # todo: fix this
 JOINT_ANGLES_IDXS = {
     "gbyk": [
-        ["l_shoulder", "neck", "l_elbow"],
-        ["r_shoulder", "neck", "r_elbow"],
-        ["l_hip", "s_tail", "l_knee"],
-        ["r_hip", "s_tail", "r_knee"],
-        ["l_elbow", "l_wrist", "l_hand"],
-        ["r_elbow", "r_wrist", "r_hand"],
+        ("l_shoulder", "neck", "l_elbow"),
+        ("r_shoulder", "neck", "r_elbow"),
+        ("l_hip", "s_tail", "l_knee"),
+        ("r_hip", "s_tail", "r_knee"),
+        ("l_elbow", "l_wrist", "l_hand"),
+        ("r_elbow", "r_wrist", "r_hand"),
     ],
     "pg": [
-        ["l_shoulder", "neck", "l_elbow"],
-        ["r_shoulder", "neck", "r_elbow"],
-        ["l_hip", "s_tail", "l_knee"],
-        ["r_hip", "s_tail", "r_knee"],
-        ["l_elbow", "l_wrist", "l_hand"],
-        ["r_elbow", "r_wrist", "r_hand"],
+        ("l_shoulder", "neck", "l_elbow"),
+        ("r_shoulder", "neck", "r_elbow"),
+        ("l_hip", "s_tail", "l_knee"),
+        ("r_hip", "s_tail", "r_knee"),
+        ("l_elbow", "l_wrist", "l_hand"),
+        ("r_elbow", "r_wrist", "r_hand"),
     ],
 }
 
@@ -253,10 +255,10 @@ def get_neckless_skeleton():
         Skeleton edges with specified neck connections removed.
     """
     remove_edges = [
-        ["neck", "head"],
-        ["neck", "nose"],
-        ["neck", "l_ear"],
-        ["neck", "r_ear"],
+        ("neck", "head"),
+        ("neck", "nose"),
+        ("neck", "l_ear"),
+        ("neck", "r_ear"),
     ]
     return [edge for edge in SKELETON if edge not in remove_edges]
 
@@ -283,41 +285,6 @@ def compute_tile_distribution(tiles, intervals=None):
     counts = np.array([(tiles == t).sum() for t in range(n_tiles)])
     distr = counts / counts.sum()
     return distr
-
-
-def list_modalities(modalities):
-    """
-    Return a list of modalities based on the input string.
-
-    Parameters
-    ----------
-    modalities : str
-        Modality type or 'all'.
-
-    Returns
-    -------
-    list
-        List of modality strings.
-
-    Raises
-    ------
-    ValueError
-        If an unknown modality is provided.
-    """
-    if modalities == "all":
-        return ["poses", "speed", "acceleration", "spike_count"]
-    elif modalities == "spike_count":
-        return ["spike_count"]
-    elif modalities == "poses":
-        return ["poses"]
-    elif modalities == "kinematics":
-        return ["poses", "speed", "acceleration"]
-    elif modalities == "poses_spike_count":
-        return ["poses", "spike_count"]
-    elif modalities == "position":
-        return ["position"]
-    else:
-        raise ValueError(f"unknown modalities: {modalities}.")
 
 
 def fix_seed(seed: int = 0) -> None:
@@ -405,7 +372,7 @@ def params_per_session(model):
 
 def project_to_pca(
     data: np.ndarray,
-    intervals: list[list[int]] | None = None,
+    intervals: list[list[int]] | list[LabeledInterval] | None = None,
     divide_variance: bool = False,
 ) -> tuple[np.ndarray, PCA]:
     """
@@ -426,10 +393,7 @@ def project_to_pca(
         (Transformed data, fitted PCA object)
     """
     if intervals:
-        data_ = np.concatenate(
-            [data[s:e] for s, e in intervals],
-            axis=0,
-        )
+        data_ = np.concatenate([data[s:e] for s, e in intervals], axis=0)
     else:
         data_ = data
 
@@ -482,7 +446,8 @@ def align_intervals(
     np.ndarray
         Aligned data of shape (n_intervals, max_len, n_features) with NaNs for padding.
     """
-    lengths = np.array([end - start + 1 for start, end in intervals])
+    lengths = [e - s + 1 for s, e in intervals]
+    lengths = np.array(lengths)
     max_len = max(
         [
             length

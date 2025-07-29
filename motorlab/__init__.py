@@ -1,13 +1,33 @@
-from . import config
-from . import data
-from . import datasets
-from . import gbyk_export
-from . import intervals
-from . import metrics
-from . import model
-from . import modules
-from . import poses
-from . import plot
-from . import room
-from . import spikes
-from . import utils
+from . import (
+    config,
+    data,
+    datasets,
+    gbyk_export,
+    intervals,
+    metrics,
+    model,
+    modules,
+    poses,
+    plot,
+    room,
+    sessions,
+    spikes,
+    utils,
+)
+
+__all__ = [
+    "config",
+    "data",
+    "datasets",
+    "gbyk_export",
+    "intervals",
+    "metrics",
+    "model",
+    "modules",
+    "poses",
+    "plot",
+    "room",
+    "sessions",
+    "spikes",
+    "utils",
+]

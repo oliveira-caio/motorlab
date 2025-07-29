@@ -72,7 +72,8 @@ def create(
 
     if is_train:
         n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"Model: {architecture} | # params: {n_params:,}")
+        print(f"Number of parameters: {n_params:,}")
+        print(model)
 
     return model
 
@@ -117,10 +118,8 @@ def load(
     torch.nn.Module
         Loaded and configured model on the specified device
     """
-    # Create the model first
     model = create(architecture, sessions, readout_map, model_dict, is_train)
 
-    # Load checkpoint
     ckpt_dir = Path(checkpoint_dir)
     if load_epoch is not None:
         checkpoint_path = ckpt_dir / f"{uid}_{load_epoch}.pt"
@@ -245,3 +244,102 @@ def dump_outputs(stacked_gts: dict, stacked_preds: dict, label: str) -> None:
             os.path.join(dump_dir, f"{label}_preds_{session}.npy"),
             stacked_preds[session],
         )
+
+
+def compute_dimensions(
+    data_dict: dict,
+    in_modalities: list[str],
+    out_modalities: list[str],
+    sessions: list[str],
+    concat_input: bool = True,
+    concat_output: bool = True,
+    n_classes: int | None = None,
+) -> tuple[dict, dict]:
+    """
+    Compute input and output dimensions for model creation from data.
+
+    Parameters
+    ----------
+    data_dict : dict
+        Dictionary of loaded data with structure {session: {modality: array}}
+    in_modalities : list[str]
+        List of input modality names
+    out_modalities : list[str]
+        List of output modality names
+    sessions : list[str]
+        List of session names
+    concat_input : bool, optional
+        Whether to concatenate input modalities, by default True
+    concat_output : bool, optional
+        Whether to concatenate output modalities, by default True
+    n_classes : int | None, optional
+        Number of classes for classification (None for regression), by default None
+
+    Returns
+    -------
+    tuple[dict, dict]
+        Tuple of (in_dim, out_dim) dictionaries with structure {session: {modality: dim}}
+
+    Examples
+    --------
+    >>> in_dim, out_dim = compute_model_dimensions(
+    ...     data_dict, ['poses'], ['position'], ['session1'],
+    ...     concat_input=True, concat_output=True
+    ... )
+    >>> # Returns: ({'session1': {'poses': 63}}, {'session1': {'position': 2}})
+    """
+    # Calculate in_dim based on concatenation settings
+    if concat_input:
+        # Concatenated input: single key with joined modality names
+        input_key = "_".join(in_modalities)
+        in_dim = {
+            session: {
+                input_key: sum(
+                    data_dict[session][m].shape[1] for m in in_modalities
+                )
+            }
+            for session in sessions
+        }
+    else:
+        # Non-concatenated input: separate keys for each modality
+        in_dim = {
+            session: {
+                modality: data_dict[session][modality].shape[1]
+                for modality in in_modalities
+            }
+            for session in sessions
+        }
+
+    # Calculate out_dim based on concatenation settings
+    if n_classes is not None:
+        # For classification, use n_classes for each output modality
+        if concat_output:
+            output_key = "_".join(out_modalities)
+            out_dim = {session: {output_key: n_classes} for session in sessions}
+        else:
+            out_dim = {
+                session: {modality: n_classes for modality in out_modalities}
+                for session in sessions
+            }
+    else:
+        # For regression, use actual data dimensions
+        if concat_output:
+            output_key = "_".join(out_modalities)
+            out_dim = {
+                session: {
+                    output_key: sum(
+                        data_dict[session][m].shape[1] for m in out_modalities
+                    )
+                }
+                for session in sessions
+            }
+        else:
+            out_dim = {
+                session: {
+                    modality: data_dict[session][modality].shape[1]
+                    for modality in out_modalities
+                }
+                for session in sessions
+            }
+
+    return in_dim, out_dim
