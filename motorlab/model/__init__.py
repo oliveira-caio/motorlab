@@ -13,9 +13,9 @@ from .training import (
 # Import factory functions
 from .factory import (
     create,
-    load,
+    load_model,
+    load_checkpoint_metadata,
     save_checkpoint,
-    save_config,
     compute_mean,
     dump_outputs,
     compute_dimensions,
@@ -35,9 +35,9 @@ __all__ = [
     "format_metrics",
     # Factory functions
     "create",
-    "load",
+    "load_model",
+    "load_checkpoint_metadata",
     "save_checkpoint",
-    "save_config",
     "compute_mean",
     "compute_dimensions",
     "dump_outputs",

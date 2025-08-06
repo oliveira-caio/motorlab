@@ -74,7 +74,12 @@ def mse(gt: np.ndarray, pred: np.ndarray) -> float:
     return np.mean((gt - pred) ** 2).item()
 
 
-def balanced_accuracy(gt: np.ndarray, pred: np.ndarray) -> float:
+def balanced_accuracy(
+    gt: np.ndarray,
+    pred: np.ndarray,
+    group_by: str = "",
+    include_sitting: bool = True,
+) -> float:
     """
     Compute balanced accuracy between ground truth and predictions.
 
@@ -84,12 +89,31 @@ def balanced_accuracy(gt: np.ndarray, pred: np.ndarray) -> float:
         Ground truth labels.
     pred : np.ndarray
         Predicted labels.
+    group_by : str, optional
+        If group_by = "x", computes balanced accuracy for x-axis predictions only.
+        If group_by = "y", computes balanced accuracy for y-axis predictions only.
+    include_sitting : bool, optional
+        Whether to include the tiles in which the monkey is sitting (0, 1, 2, 12, 13, 14).
 
     Returns
     -------
     float
         Balanced accuracy score.
     """
+    if not include_sitting:
+        non_sitting_indices = ~np.isin(gt, [0, 1, 2, 12, 13, 14])
+        gt = gt[non_sitting_indices]
+        pred = pred[non_sitting_indices]
+
+    if group_by == "x":
+        # collapses the y-axis such that all y values are grouped by x.
+        gt = gt % 3
+        pred = pred % 3
+    elif group_by == "y":
+        # collapses the x-axis such that all x values are grouped by y.
+        gt = gt // 3
+        pred = pred // 3
+
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",

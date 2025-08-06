@@ -13,7 +13,7 @@ x_divisions = 3
 y_divisions = 5
 
 
-def get_tiles(xs, ys):
+def get_tiles(xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
     """
     Compute the tile number for given x and y coordinates in the room.
 

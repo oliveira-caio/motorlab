@@ -10,21 +10,19 @@ from motorlab import (
     modules,
     config as config_module,
 )
-from motorlab.model.training import iterate, iterate_entire_trials, loop, track
+from motorlab.model.training import iterate, iterate_entire_trials, loop
 from motorlab.model.factory import (
     compute_dimensions,
     create,
-    load,
-    save_config,
+    load_model,
     save_checkpoint,
+    load_checkpoint_metadata,
 )
 
 
-def setup(
-    config: dict, train_intervals: dict, is_train: bool
-) -> tuple[torch.nn.Module, dict, dict]:
+def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
     """
-    Set up model, data, and loss functions for training or evaluation.
+    Set up model, data, loss functions, and optionally optimizer/scheduler for training or evaluation.
 
     Parameters
     ----------
@@ -37,8 +35,8 @@ def setup(
 
     Returns
     -------
-    tuple[torch.nn.Module, dict, dict]
-        Tuple containing (model, data_dict, loss_fns)
+    dict
+        Dictionary containing model, data_dict, loss_fns, and optionally optimizer/scheduler
     """
     utils.fix_seed(config.get("seed", 0))
 
@@ -58,7 +56,6 @@ def setup(
     model_dict = config["model"].copy()
 
     if is_train:
-        # Use centralized dimension computation
         in_dim, out_dim = compute_dimensions(
             data_dict=data_dict,
             in_modalities=config["in_modalities"],
@@ -72,11 +69,9 @@ def setup(
         model_dict["in_dim"] = in_dim
         model_dict["out_dim"] = out_dim
 
-    checkpoint_dir = config.get("checkpoint_dir", "checkpoint/")
     uid = config.get("uid", None)
 
     if uid is not None:
-        # Compute missing dimensions using centralized function
         if not model_dict.get("in_dim") or not model_dict.get("out_dim"):
             in_dim, out_dim = compute_dimensions(
                 data_dict=data_dict,
@@ -87,26 +82,27 @@ def setup(
                 concat_output=config["dataset"].get("concat_output", True),
                 n_classes=config["model"].get("n_classes", None),
             )
+            model_dict["in_dim"] = in_dim
+            model_dict["out_dim"] = out_dim
 
-            if not model_dict.get("in_dim"):
-                model_dict["in_dim"] = in_dim
-            if not model_dict.get("out_dim"):
-                model_dict["out_dim"] = out_dim
+        checkpoint_data = load_checkpoint_metadata(
+            uid=uid,
+            checkpoint_dir=config.get(
+                "checkpoint_load_dir", config["checkpoint_dir"]
+            ),
+            load_epoch=config.get("load_epoch", None),
+        )
 
-        if uid is None:
-            raise ValueError("uid must be provided when loading checkpoint")
-
-        model = load(
+        model = load_model(
             architecture=config["model"]["architecture"],
             sessions=config["sessions"],
             readout_map=config["model"]["readout_map"],
             model_dict=model_dict,
-            uid=uid,
-            checkpoint_dir=checkpoint_dir,
-            load_epoch=config.get("load_epoch", None),
+            checkpoint_data=checkpoint_data,
             freeze=config.get("freeze_core", False),
             is_train=is_train,
         )
+
     else:
         model = create(
             architecture=config["model"]["architecture"],
@@ -115,20 +111,61 @@ def setup(
             model_dict=model_dict,
             is_train=is_train,
         )
+        checkpoint_data = None
 
     loss_fns = {
         session: modules.DictLoss(config["loss_fn"])
         for session in config["sessions"]
     }
 
+    result = {
+        "model": model,
+        "data_dict": data_dict,
+        "loss_fns": loss_fns,
+    }
+
     if is_train:
+        optimizer = torch.optim.Adam(
+            model.parameters(), lr=config["training"].get("lr", 5e-3)
+        )
+
+        schedulers = {
+            "step_lr": torch.optim.lr_scheduler.StepLR(
+                optimizer,
+                step_size=config["training"].get("step_size", 25),
+                gamma=config["training"].get("gamma", 0.4),
+            ),
+            "cosine_annealing": torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=config["training"].get("T_max", 100),
+                eta_min=config["training"].get("eta_min", 1e-4),
+            ),
+        }
+        scheduler = schedulers[config["training"].get("scheduler", "step_lr")]
+
+        if checkpoint_data is not None:
+            if "optimizer_state_dict" in checkpoint_data:
+                optimizer.load_state_dict(
+                    checkpoint_data["optimizer_state_dict"]
+                )
+            if "scheduler_state_dict" in checkpoint_data:
+                scheduler.load_state_dict(
+                    checkpoint_data["scheduler_state_dict"]
+                )
+            if "random_state" in checkpoint_data:
+                torch.set_rng_state(checkpoint_data["random_state"])
+
+        result["optimizer"] = optimizer
+        result["scheduler"] = scheduler
+        result["checkpoint_data"] = checkpoint_data
+
         uid = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         if "uid" in config:
             config["old_uid"] = config["uid"]
         config["uid"] = str(uid)
         print(f"uid: {uid}")
 
-    return model, data_dict, loss_fns
+    return result
 
 
 def train(config: dict) -> None:
@@ -154,18 +191,27 @@ def train(config: dict) -> None:
     """
     config = config_module.preprocess(config)
 
-    test_intervals, train_intervals, valid_intervals = intervals.load_by_tiers(
-        data_dir=config["data_dir"],
-        sessions=config["sessions"],
-        experiment=config["experiment"],
-        include_trial=config["intervals"].get("include_trial", True),
-        include_homing=config["intervals"].get("include_homing", False),
-        include_sitting=config["intervals"].get("include_sitting", True),
-        balance_intervals=config["intervals"].get("balance_intervals", False),
-        sampling_rate=config["intervals"].get("sampling_rate", 20),
+    test_intervals, train_intervals, valid_intervals = (
+        intervals.load_all_by_tiers(
+            data_dir=config["data_dir"],
+            sessions=config["sessions"],
+            experiment=config["experiment"],
+            include_trial=config["intervals"].get("include_trial", True),
+            include_homing=config["intervals"].get("include_homing", False),
+            include_sitting=config["intervals"].get("include_sitting", True),
+            balance_intervals=config["intervals"].get(
+                "balance_intervals", False
+            ),
+            sampling_rate=config["intervals"].get("sampling_rate", 20),
+        )
     )
 
-    model, data_dict, loss_fns = setup(config, train_intervals, is_train=True)
+    setup_result = setup(config, train_intervals, is_train=True)
+    model = setup_result["model"]
+    data_dict = setup_result["data_dict"]
+    loss_fns = setup_result["loss_fns"]
+    optimizer = setup_result["optimizer"]
+    scheduler = setup_result["scheduler"]
 
     train_datasets = datasets.load_datasets(
         data_dict,
@@ -203,21 +249,6 @@ def train(config: dict) -> None:
         shuffle=False,
     )
 
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=config["training"].get("lr", 1e-3)
-    )
-
-    scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer,
-        step_size=config["training"].get("step_size", 25),
-        gamma=config["training"].get("gamma", 0.1),
-    )
-
-    def track_wrapper(metrics):
-        return track(metrics, config, model)
-
-    track_fn = track_wrapper
-
     loop(
         model,
         train_dataloaders,
@@ -226,13 +257,29 @@ def train(config: dict) -> None:
         optimizer,
         scheduler,
         config["metric"],
-        config["training"].get("n_epochs", 400),
-        track_fn,
+        config["training"].get("n_epochs", 250),
+        print_metrics=config["track"].get("metrics", False),
+        use_wandb=config["track"].get("wandb", False),
+        save_checkpoint=config["track"].get("checkpoint", False),
+        checkpoint_dir=config.get(
+            "checkpoint_save_dir", config["checkpoint_dir"]
+        ),
+        uid=config["uid"],
     )
 
     if config.get("save", False):
-        save_config(config)
-        save_checkpoint(model, config)
+        config_module.save(config)
+
+        checkpoint_dir = config.get(
+            "checkpoint_save_dir", config["checkpoint_dir"]
+        )
+        checkpoint_path = f"{checkpoint_dir}/{config['uid']}.pt"
+        save_checkpoint(
+            model=model,
+            checkpoint_path=checkpoint_path,
+            optimizer=optimizer,
+            scheduler=scheduler,
+        )
 
 
 def evaluate(config: dict) -> tuple[dict, dict, dict]:
@@ -265,18 +312,25 @@ def evaluate(config: dict) -> tuple[dict, dict, dict]:
     """
     config = config_module.preprocess(config)
 
-    test_intervals, train_intervals, valid_intervals = intervals.load_by_tiers(
-        data_dir=config["data_dir"],
-        sessions=config["sessions"],
-        experiment=config["experiment"],
-        include_trial=config["intervals"].get("include_trial", True),
-        include_homing=config["intervals"].get("include_homing", False),
-        include_sitting=config["intervals"].get("include_sitting", True),
-        balance_intervals=config["intervals"].get("balance_intervals", False),
-        sampling_rate=config["intervals"].get("sampling_rate", 20),
+    test_intervals, train_intervals, valid_intervals = (
+        intervals.load_all_by_tiers(
+            data_dir=config["data_dir"],
+            sessions=config["sessions"],
+            experiment=config["experiment"],
+            include_trial=config["intervals"].get("include_trial", True),
+            include_homing=config["intervals"].get("include_homing", False),
+            include_sitting=config["intervals"].get("include_sitting", True),
+            balance_intervals=config["intervals"].get(
+                "balance_intervals", False
+            ),
+            sampling_rate=config["intervals"].get("sampling_rate", 20),
+        )
     )
 
-    model, data_dict, loss_fns = setup(config, train_intervals, is_train=False)
+    setup_result = setup(config, train_intervals, is_train=False)
+    model = setup_result["model"]
+    data_dict = setup_result["data_dict"]
+    loss_fns = setup_result["loss_fns"]
 
     test_datasets = datasets.load_datasets(
         data_dict,

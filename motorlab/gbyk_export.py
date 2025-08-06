@@ -71,7 +71,7 @@ from sklearn.model_selection import train_test_split
 from motorlab import room, utils
 
 
-def extract_strings(references: list, file: h5py.File) -> list:
+def _extract_hdf5_strings(references: list, file: h5py.File) -> list:
     """Extract string data from HDF5 file references.
 
     Args:
@@ -334,7 +334,7 @@ def spikes(session_dir: Path | str, sampling_rate: int = 20) -> None:
     ### save brain areas data
     with open(spikes_meta_dir / "areas.npy", "wb") as f:
         areas = np.array(
-            extract_strings(dataset["spikes"]["array_labels"], dataset)
+            _extract_hdf5_strings(dataset["spikes"]["array_labels"], dataset)
         )
         array_code = dataset["spikes"]["array_code"][:].ravel() - 1  # 1-based
         np.save(f, np.char.lower(areas[array_code.astype(int)]))

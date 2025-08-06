@@ -92,7 +92,92 @@ def _process_interval_frames(
     return start, end
 
 
-def load_by_tiers(
+def load(
+    data_dir: str | Path,
+    session: str,
+    experiment: str,
+    include_trial: bool = True,
+    include_homing: bool = True,
+    include_sitting: bool = True,
+    balance_intervals: bool = False,
+    sampling_rate: int = 20,
+) -> list[LabeledInterval]:
+    """
+    Load intervals for a single session.
+
+    Parameters
+    ----------
+    data_dir : str or Path
+        Path to the intervals directory.
+    session : str
+        Session name.
+    experiment : str
+        Experiment name.
+    include_trial : bool, optional
+        Whether to include trial intervals. Default is True.
+    include_homing : bool, optional
+        Whether to include homing intervals. Default is True.
+    include_sitting : bool, optional
+        Whether to include sitting intervals. Default is True.
+    balance_intervals : bool, optional
+        Whether to balance intervals. Default is False.
+    sampling_rate : int, optional
+        Sampling rate in Hz. Default is 20.
+
+    Returns
+    -------
+    dict
+        Dictionary mapping session names to lists of LabeledInterval objects.
+    """
+    data_dir = Path(data_dir)
+    period = 1000 // sampling_rate
+
+    intervals_dir = data_dir / session / "intervals"
+    intervals = []
+    tiles = data.load_tiles(
+        data_dir,
+        session,
+        experiment,
+        representation="tiles",
+    )
+
+    for interval_file in sorted(intervals_dir.iterdir()):
+        with interval_file.open("r") as f:
+            interval_info = yaml.safe_load(f)
+
+        if not _should_include_interval(
+            interval_info, include_trial, include_homing
+        ):
+            continue
+
+        # Convert frame indices to sampling rate
+        start = interval_info["first_frame_idx"] // period
+        num_frames = interval_info["num_frames"] // period
+        end = start + num_frames
+
+        start, end = _process_interval_frames(
+            start, end, tiles, include_sitting, balance_intervals
+        )
+
+        interval = LabeledInterval(
+            start=start,
+            end=end,
+            cue_frame_idx=interval_info["cue_frame_idx"] // period,
+            reward=interval_info["reward"],
+            side=interval_info["side"],
+            tier=interval_info["tier"],
+            type=interval_info["type"],
+        )
+        intervals.append(interval)
+
+    return intervals
+
+
+def load_by_tiers():
+    pass
+
+
+def load_all_by_tiers(
     data_dir: str | Path,
     sessions: list[str],
     experiment: str,

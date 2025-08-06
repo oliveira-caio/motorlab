@@ -1,14 +1,23 @@
-from collections.abc import Callable
-
 import numpy as np
 import torch
 import wandb
 
 from motorlab import metrics, utils
-from motorlab.model.factory import save_checkpoint, compute_mean
+from motorlab.model.factory import compute_mean, save_checkpoint as save_ckpt
 
 
-def track(metrics, config, model):
+def track(
+    metrics: dict,
+    model: torch.nn.Module,
+    print_metrics: bool = True,
+    use_wandb: bool = False,
+    save_checkpoint: bool = True,
+    checkpoint_dir: str | None = None,
+    uid: str | None = None,
+    n_epochs: int | None = None,
+    optimizer: torch.optim.Optimizer | None = None,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+):
     """
     Track and log metrics during training or evaluation.
 
@@ -16,22 +25,48 @@ def track(metrics, config, model):
     ----------
     metrics : dict
         Dictionary of metric names and values.
-    config : dict
-        Configuration dictionary.
     model : torch.nn.Module
         Model being trained or evaluated.
+    print_metrics : bool, optional
+        Whether to print metrics to console, by default True
+    use_wandb : bool, optional
+        Whether to log metrics to Weights & Biases, by default False
+    save_checkpoint : bool, optional
+        Whether to save intermediate checkpoints during training, by default True
+    checkpoint_dir : Path | str | None, optional
+        Directory to save checkpoints, by default None
+    uid : str | None, optional
+        Unique identifier for checkpoint filenames, by default None
+    n_epochs : int | None, optional
+        Total number of training epochs, by default None
+    optimizer : torch.optim.Optimizer | None, optional
+        Optimizer for checkpoint saving, by default None
+    scheduler : torch.optim.lr_scheduler.LRScheduler | None, optional
+        Scheduler for checkpoint saving, by default None
     """
-    if config["track"].get("metrics", False):
+    if print_metrics:
         print(format_metrics(metrics))
-    if config["track"].get("wandb", False):
+
+    if use_wandb:
         wandb.log({k: v for k, v in metrics.items() if k != "epoch"})
+
     if (
-        config["track"].get("save_checkpoint", False)
-        and metrics["epoch"] != config["training"]["n_epochs"]
-        and (metrics["epoch"] - 1) % 25 == 0
+        save_checkpoint
+        and checkpoint_dir is not None
+        and uid is not None
+        and n_epochs is not None
+        and metrics["epoch"] != n_epochs
+        and metrics["epoch"] % 25 == 0
         and metrics["epoch"] != 1
     ):
-        save_checkpoint(model, config, metrics["epoch"] - 1)
+        checkpoint_path = f"{checkpoint_dir}/{uid}_{metrics['epoch']}.pt"
+        save_ckpt(
+            model=model,
+            checkpoint_path=checkpoint_path,
+            epoch=metrics["epoch"],
+            optimizer=optimizer,
+            scheduler=scheduler,
+        )
 
 
 def format_metrics(metrics: dict) -> str:
@@ -89,8 +124,8 @@ def iterate_entire_trials(
     tuple[dict, dict, dict]
         Tuple containing:
         - metrics: Dict of computed metric values
-        - gts: Dict mapping sessions to ground truth arrays
-        - preds: Dict mapping sessions to prediction arrays
+        - gts: Dict mapping sessions to the dictionary of modalities. Each modality dictionary maps the modality to the list of ground truth arrays per trial.
+        - preds: Dict mapping sessions to the dictionary of modalities. Each modality dictionary maps the modality to the list of prediction arrays per trial.
     """
     model.eval()
     gts = {session: {} for session in dataloaders}
@@ -99,54 +134,66 @@ def iterate_entire_trials(
     with torch.no_grad():
         for session in dataloaders:
             for x_trial, y_trial in dataloaders[session]:
-                x_trial = {k: v.to(utils.DEVICE) for k, v in x_trial.items()}
+                x_trial = {
+                    modality_name: modality_tensor.to(utils.DEVICE)
+                    for modality_name, modality_tensor in x_trial.items()
+                }
 
                 x_seqs = [
-                    {modality: seq}
-                    for modality, tensor in x_trial.items()
+                    {modality_name: seq}
+                    for modality_name, modality_tensor in x_trial.items()
                     for seq in torch.tensor_split(
-                        tensor, tensor.shape[1] // seq_length, dim=1
+                        modality_tensor,
+                        modality_tensor.shape[1] // seq_length,
+                        dim=1,
                     )
                 ]
 
-                seq_preds = [model(seq_input, session) for seq_input in x_seqs]
-
-                trial_pred = {}
-                for modality in y_trial.keys():
-                    modality_preds = [pred[modality] for pred in seq_preds]
-                    trial_pred[modality] = torch.cat(modality_preds, dim=1)
-
-                for modality in y_trial.keys():
-                    if modality not in gts[session]:
-                        gts[session][modality] = []
-                        preds[session][modality] = []
-
-                    gts[session][modality].append(
-                        y_trial[modality].detach().cpu().numpy()
+                seq_preds = [model(seq, session) for seq in x_seqs]
+                trial_pred = {
+                    modality_name: torch.cat(
+                        [pred[modality_name] for pred in seq_preds], dim=1
                     )
-                    preds[session][modality].append(
-                        trial_pred[modality].detach().cpu().numpy()
+                    for modality_name in y_trial.keys()
+                }
+
+                for modality_name in y_trial.keys():
+                    if modality_name not in gts[session]:
+                        gts[session][modality_name] = []
+                        preds[session][modality_name] = []
+
+                    gts[session][modality_name].append(
+                        y_trial[modality_name].detach().cpu().numpy().squeeze(0)
+                    )
+                    preds[session][modality_name].append(
+                        trial_pred[modality_name]
+                        .detach()
+                        .cpu()
+                        .numpy()
+                        .squeeze(0)
                     )
 
-    stacked_gts = {}
-    stacked_preds = {}
-    for session in gts:
-        stacked_gts[session] = {}
-        stacked_preds[session] = {}
-        for modality in gts[session]:
-            stacked_gts[session][modality] = np.concatenate(
-                gts[session][modality], axis=1
-            ).squeeze(0)
-            stacked_preds[session][modality] = np.concatenate(
-                preds[session][modality], axis=1
-            ).squeeze(0)
+    stacked_gts = {
+        session: {
+            modality_name: np.concatenate(gts[session][modality_name], axis=0)
+            for modality_name in gts[session]
+        }
+        for session in gts
+    }
+    stacked_preds = {
+        session: {
+            modality_name: np.concatenate(preds[session][modality_name], axis=0)
+            for modality_name in preds[session]
+        }
+        for session in preds
+    }
 
     track_metrics = {}
     if metric is not None:
         computed_metrics = metrics.compute(stacked_gts, stacked_preds, metric)
         track_metrics.update(computed_metrics)
 
-    return track_metrics, stacked_gts, stacked_preds
+    return track_metrics, gts, preds
 
 
 def iterate(
@@ -213,18 +260,25 @@ def iterate(
                     optimizer.step()
                     losses.append(loss.item())
 
-        stacked_gts = {}
-        stacked_preds = {}
-        for session in gts:
-            stacked_gts[session] = {}
-            stacked_preds[session] = {}
-            for modality in gts[session]:
-                stacked_gts[session][modality] = np.concatenate(
-                    gts[session][modality], axis=0
+        stacked_gts = {
+            session: {
+                modality_name: np.concatenate(
+                    gts[session][modality_name], axis=0
                 )
-                stacked_preds[session][modality] = np.concatenate(
-                    preds[session][modality], axis=0
+                for modality_name in gts[session]
+            }
+            for session in gts
+        }
+
+        stacked_preds = {
+            session: {
+                modality_name: np.concatenate(
+                    preds[session][modality_name], axis=0
                 )
+                for modality_name in preds[session]
+            }
+            for session in preds
+        }
 
         if metric is not None:
             computed_metrics = metrics.compute(
@@ -253,7 +307,11 @@ def loop(
     scheduler: torch.optim.lr_scheduler.LRScheduler,
     metric: dict | None,
     n_epochs: int,
-    track_fn: Callable | None = None,
+    print_metrics: bool = True,
+    use_wandb: bool = False,
+    save_checkpoint: bool = False,
+    checkpoint_dir: str | None = None,
+    uid: str | None = None,
     validation_n_epochs: int = 25,
 ) -> None:
     """
@@ -277,23 +335,43 @@ def loop(
         Metric configuration for evaluation
     n_epochs : int
         Number of training epochs
-    track_fn : callable | None, optional
-        Function to call for tracking metrics (receives metrics dict), by default None
+    print_metrics : bool, optional
+        Whether to print metrics during training, by default True
+    use_wandb : bool, optional
+        Whether to log to Weights & Biases, by default False
+    save_checkpoint : bool, optional
+        Whether to save checkpoints, by default False
+    checkpoint_dir : str | None, optional
+        Directory to save checkpoints, by default None
+    uid : str | None, optional
+        Unique identifier for saving, by default None
     validation_n_epochs : int, optional
         Run validation every N epochs, by default 25
     """
     valid_metrics, _, _ = iterate(
         model,
         valid_dataloaders,
-        loss_fns,
-        optimizer,
-        metric,
+        loss_fns=dict(),
+        optimizer=None,
+        metric=metric,
     )
     valid_metrics["epoch"] = 1
-    if track_fn is not None:
-        track_fn(valid_metrics)
+    track(
+        metrics=valid_metrics,
+        model=model,
+        print_metrics=print_metrics,
+        use_wandb=use_wandb,
+        save_checkpoint=False,
+        checkpoint_dir=checkpoint_dir,
+        uid=uid,
+        n_epochs=n_epochs,
+        optimizer=optimizer,
+        scheduler=scheduler,
+    )
 
     for i in range(n_epochs):
+        display_epoch = i + 1
+
         train_metrics, _, _ = iterate(
             model,
             train_dataloaders,
@@ -302,22 +380,44 @@ def loop(
             metric,
             is_train=True,
         )
-        train_metrics["epoch"] = i + 1
-        if track_fn is not None:
-            track_fn(train_metrics)
+
+        scheduler.step()
+
+        train_metrics["epoch"] = display_epoch
+        track(
+            metrics=train_metrics,
+            model=model,
+            print_metrics=print_metrics,
+            use_wandb=use_wandb,
+            save_checkpoint=save_checkpoint,
+            checkpoint_dir=checkpoint_dir,
+            uid=uid,
+            n_epochs=n_epochs,
+            optimizer=optimizer,
+            scheduler=scheduler,
+        )
 
         if ((i + 1) % validation_n_epochs) == 0:
             valid_metrics, _, _ = iterate(
                 model,
                 valid_dataloaders,
-                loss_fns,
-                optimizer,
-                metric,
+                loss_fns=dict(),
+                optimizer=None,
+                metric=metric,
             )
-            valid_metrics["epoch"] = i + 1
-            if track_fn is not None:
-                track_fn(valid_metrics)
+            valid_metrics["epoch"] = display_epoch
+            track(
+                metrics=valid_metrics,
+                model=model,
+                print_metrics=print_metrics,
+                use_wandb=use_wandb,
+                save_checkpoint=False,
+                checkpoint_dir=checkpoint_dir,
+                uid=uid,
+                n_epochs=n_epochs,
+                optimizer=optimizer,
+                scheduler=scheduler,
+            )
 
-        scheduler.step()
         if train_metrics["grad_norm"] < 1e-5 or np.isnan(train_metrics["loss"]):
             break

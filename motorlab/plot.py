@@ -341,7 +341,14 @@ def poses3d(
         update_fig(fig, ax)
 
 
-def com(data_dir, sessions=None, ncols=3, homing=False, save_path=None):
+def com(
+    data_dir,
+    sessions=None,
+    ncols=3,
+    include_trial=True,
+    include_homing=False,
+    save_path=None,
+):
     """
     Plot center of mass (COM) trajectories for each session.
 
@@ -353,7 +360,9 @@ def com(data_dir, sessions=None, ncols=3, homing=False, save_path=None):
         List of session names. Default is None (use directory name).
     ncols : int, optional
         Number of columns in subplot grid. Default is 3.
-    homing : bool, optional
+    include_trial : bool, optional
+        Whether to include trial intervals. Default is True.
+    include_homing : bool, optional
         Whether to plot homing intervals. Default is False.
     save_path : str, optional
         Path to save the figure. Default is None.
@@ -377,34 +386,23 @@ def com(data_dir, sessions=None, ncols=3, homing=False, save_path=None):
     )
     axs = axs.flat
 
-    for i, s in enumerate(sessions):
-        poses_dir = data_dir / s / "poses"
+    for i, session in enumerate(sessions):
+        poses_dir = data_dir / session / "poses"
         poses_ = data.load_from_memmap(poses_dir)
         poses_ = poses_.reshape(-1, 21, 3)
         com = poses_[:, utils.COM_KEYPOINTS_IDXS["gbyk"], :2].mean(axis=1)
 
-        trials_dir = data_dir / s / "trials"
-        tiles = None
-        try:
-            tiles = data.load_tiles(data_dir, s, "gbyk", "tiles")
-        except Exception:
-            pass
-        if homing:
-            _intervals = (
-                intervals.get_homing_intervals(trials_dir, tiles)
-                if tiles is not None
-                else []
-            )
-        else:
-            _intervals = (
-                intervals.get_trials_intervals(trials_dir, tiles)
-                if tiles is not None
-                else []
-            )
+        _intervals = intervals.load(
+            data_dir,
+            session,
+            experiment="gbyk",
+            include_trial=include_trial,
+            include_homing=include_homing,
+        )
 
         for start, end in _intervals:
             axs[i].plot(com[start:end, 0], com[start:end, 1], color="b")
-            axs[i].set_title(s)
+            axs[i].set_title(session)
 
     if save_path:
         plt.savefig(save_path, bbox_inches="tight", dpi=300)

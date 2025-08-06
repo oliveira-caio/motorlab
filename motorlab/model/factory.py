@@ -4,9 +4,39 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import yaml
 
 from motorlab import modules, utils
+
+
+def load_checkpoint_metadata(
+    uid: str,
+    checkpoint_dir: Path | str,
+    load_epoch: int | None = None,
+) -> dict:
+    """
+    Load checkpoint metadata and full checkpoint data.
+
+    Parameters
+    ----------
+    uid : str
+        Unique identifier for the checkpoint
+    checkpoint_dir : Path | str
+        Directory containing checkpoints
+    load_epoch : int | None, optional
+        Specific epoch to load (None for latest), by default None
+
+    Returns
+    -------
+    dict
+        Complete checkpoint dictionary containing model_state_dict,
+        optimizer_state_dict, scheduler_state_dict, epoch, etc.
+    """
+    checkpoint_dir = Path(checkpoint_dir)
+    if load_epoch is not None:
+        checkpoint_path = checkpoint_dir / f"{uid}_{load_epoch}.pt"
+    else:
+        checkpoint_path = checkpoint_dir / f"{uid}.pt"
+    return torch.load(checkpoint_path, map_location="cpu")
 
 
 def create(
@@ -78,19 +108,17 @@ def create(
     return model
 
 
-def load(
+def load_model(
     architecture: str,
     sessions: list[str],
     readout_map: dict,
     model_dict: dict,
-    uid: str,
-    checkpoint_dir: Path | str,
-    load_epoch: int | None = None,
+    checkpoint_data: dict,
     freeze: bool = False,
     is_train: bool = True,
 ) -> torch.nn.Module:
     """
-    Load a model from checkpoint.
+    Load a model from checkpoint data.
 
     Parameters
     ----------
@@ -102,12 +130,8 @@ def load(
         Mapping from modality to readout type
     model_dict : dict
         Model-specific parameters
-    uid : str
-        Unique identifier for the checkpoint
-    checkpoint_dir : Path | str
-        Directory containing checkpoints
-    load_epoch : int | None, optional
-        Specific epoch to load (None for latest), by default None
+    checkpoint_data : dict
+        Checkpoint dictionary containing model_state_dict
     freeze : bool, optional
         Whether to freeze core model parameters, by default False
     is_train : bool, optional
@@ -116,23 +140,15 @@ def load(
     Returns
     -------
     torch.nn.Module
-        Loaded and configured model on the specified device
+        Loaded model on the specified device
     """
     model = create(architecture, sessions, readout_map, model_dict, is_train)
-
-    ckpt_dir = Path(checkpoint_dir)
-    if load_epoch is not None:
-        checkpoint_path = ckpt_dir / f"{uid}_{load_epoch}.pt"
-    else:
-        checkpoint_path = ckpt_dir / f"{uid}.pt"
-
-    model.load_state_dict(torch.load(checkpoint_path, map_location="cpu"))
+    model.load_state_dict(checkpoint_data["model_state_dict"])
 
     if freeze:
-        state_dict = torch.load(checkpoint_path, map_location="cpu")
         filtered_state_dict = {
             k: v
-            for k, v in state_dict.items()
+            for k, v in checkpoint_data["model_state_dict"].items()
             if "in_layer" in k or "core" in k
         }
         model.load_state_dict(filtered_state_dict, strict=False)
@@ -147,48 +163,49 @@ def load(
     return model
 
 
-def save_config(config):
+def save_checkpoint(
+    model: torch.nn.Module,
+    checkpoint_path: Path | str,
+    epoch: int | None = None,
+    optimizer: torch.optim.Optimizer | None = None,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+    **additional_state,
+) -> None:
     """
-    Save configuration dictionary to a YAML file.
-
-    Parameters
-    ----------
-    config : dict
-        Configuration dictionary.
-    """
-    config_dir = Path(
-        config["config_save_dir"]
-        if "config_save_dir" in config
-        else config["config_dir"]
-    )
-    config_dir.mkdir(parents=True, exist_ok=True)
-    config_path = config_dir / f"{config['uid']}.yaml"
-    with open(config_path, "w") as f:
-        yaml.safe_dump(config, f)
-
-
-def save_checkpoint(model, config, epoch=None):
-    """
-    Save model checkpoint to disk.
+    Save model checkpoint to disk with complete training state.
 
     Parameters
     ----------
     model : torch.nn.Module
         Model to save.
-    config : dict
-        Configuration dictionary.
+    checkpoint_path : Path | str
+        Full path where the checkpoint will be saved.
     epoch : int, optional
-        Epoch number for checkpoint filename. Default is None.
+        Current epoch number. Default is None.
+    optimizer : torch.optim.Optimizer, optional
+        Optimizer to save state from. Default is None.
+    scheduler : torch.optim.lr_scheduler.LRScheduler, optional
+        Learning rate scheduler to save state from. Default is None.
+    **additional_state
+        Additional state to save in the checkpoint.
     """
-    checkpoint_dir = Path(
-        config["checkpoint_save_dir"]
-        if "checkpoint_save_dir" in config
-        else config["checkpoint_dir"]
-    )
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{config['uid']}_{epoch}.pt" if epoch else f"{config['uid']}.pt"
-    checkpoint_path = checkpoint_dir / filename
-    torch.save(model.state_dict(), checkpoint_path)
+    checkpoint_path = Path(checkpoint_path)
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+
+    checkpoint = {
+        "model_state_dict": model.state_dict(),
+        "epoch": epoch,
+        "random_state": torch.get_rng_state(),
+    }
+
+    if optimizer is not None:
+        checkpoint["optimizer_state_dict"] = optimizer.state_dict()
+
+    if scheduler is not None:
+        checkpoint["scheduler_state_dict"] = scheduler.state_dict()
+
+    checkpoint.update(additional_state)
+    torch.save(checkpoint, checkpoint_path)
 
 
 def compute_mean(model: torch.nn.Module) -> float:

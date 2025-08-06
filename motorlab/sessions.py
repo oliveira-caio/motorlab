@@ -11,7 +11,7 @@ GBYK = [
     "bex_20230701_spikes_sorted_SES",  # Before condition
     "bex_20230708_spikes_sorted_SES",  # While condition
     # Ken sessions
-    # "ken_20230614_spikes_sorted_SES",              # While, before (issues with the spikes)
+    # "ken_20230614_spikes_sorted_SES",  # While, before
     "ken_20230618_spikes_sorted_SES",  # Before condition
     "ken_20230622_spikes_sorted_SES",  # While, before, free conditions
     "ken_20230629_spikes_sorted_SES",  # While, before, free conditions
