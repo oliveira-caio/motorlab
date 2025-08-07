@@ -13,6 +13,7 @@ from . import (
     sessions,
     spikes,
     utils,
+    wandb,
 )
 
 __all__ = [
@@ -30,4 +31,5 @@ __all__ = [
     "sessions",
     "spikes",
     "utils",
+    "wandb",
 ]

@@ -2,22 +2,23 @@ import numpy as np
 import torch
 import wandb
 
-from motorlab import metrics, utils
-from motorlab.model.factory import compute_mean, save_checkpoint as save_ckpt
+from motorlab import logger, metrics, utils
+from motorlab.model.factory import save_checkpoint as save_ckpt
 
 
 def track(
     metrics: dict,
     model: torch.nn.Module,
-    print_metrics: bool = True,
     use_wandb: bool = False,
-    save_checkpoint: bool = True,
+    save_checkpoint: bool = False,
     checkpoint_dir: str | None = None,
     uid: str | None = None,
     n_epochs: int | None = None,
     optimizer: torch.optim.Optimizer | None = None,
     scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
-):
+    is_validation: bool = False,
+    log_metrics: bool = True,
+) -> None:
     """
     Track and log metrics during training or evaluation.
 
@@ -27,8 +28,10 @@ def track(
         Dictionary of metric names and values.
     model : torch.nn.Module
         Model being trained or evaluated.
-    print_metrics : bool, optional
-        Whether to print metrics to console, by default True
+    print_stdout : bool, optional
+        Whether to enable logging, by default True
+    log_metrics : bool, optional
+        Whether to log metrics to file, by default True
     use_wandb : bool, optional
         Whether to log metrics to Weights & Biases, by default False
     save_checkpoint : bool, optional
@@ -43,9 +46,18 @@ def track(
         Optimizer for checkpoint saving, by default None
     scheduler : torch.optim.lr_scheduler.LRScheduler | None, optional
         Scheduler for checkpoint saving, by default None
+    is_validation : bool, optional
+        Whether these are validation metrics (adds 'val_' prefix), by default False
     """
-    if print_metrics:
-        print(format_metrics(metrics))
+    if is_validation:
+        metrics = {
+            f"val_{k}" if k != "epoch" else k: v for k, v in metrics.items()
+        }
+
+    if log_metrics:
+        run_logger = logger.get()
+        if run_logger.handlers:
+            run_logger.info(format_metrics(metrics))
 
     if use_wandb:
         wandb.log({k: v for k, v in metrics.items() if k != "epoch"})
@@ -93,7 +105,7 @@ def format_metrics(metrics: dict) -> str:
             formatted.append(f"{key}: {value:.8f}")
         elif "epoch" in key:
             formatted.append(f"{key}: {value:04d}")
-    return " | ".join(reversed(formatted))
+    return "\t| ".join(reversed(formatted))
 
 
 def iterate_entire_trials(
@@ -234,6 +246,7 @@ def iterate(
     preds = {session: {} for session in dataloaders}
     track_metrics = dict()
     losses = []
+    grad_norms = []
 
     with torch.set_grad_enabled(is_train):
         for session in dataloaders:
@@ -253,12 +266,23 @@ def iterate(
                         pred[modality].detach().cpu().numpy()
                     )
 
+                loss = loss_fns[session](pred, y_trial)
+                losses.append(loss.item())
+
                 if is_train and optimizer is not None:
                     optimizer.zero_grad()
-                    loss = loss_fns[session](pred, y_trial)
                     loss.backward()
+                    grad_norm = torch.sqrt(
+                        torch.tensor(
+                            sum(
+                                p.grad.norm().item() ** 2
+                                for p in model.parameters()
+                                if p.grad is not None
+                            )
+                        )
+                    ).item()
+                    grad_norms.append(grad_norm)
                     optimizer.step()
-                    losses.append(loss.item())
 
         stacked_gts = {
             session: {
@@ -289,11 +313,8 @@ def iterate(
         if losses:
             track_metrics["loss"] = np.mean(losses)
 
-        if is_train:
-            track_metrics["grad_norm"] = torch.nn.utils.clip_grad_norm_(
-                model.parameters(), max_norm=float("inf")
-            ).item()
-            track_metrics["mean_weight"] = compute_mean(model)
+        if grad_norms:
+            track_metrics["grad_norm"] = np.mean(grad_norms)
 
     return track_metrics, stacked_gts, stacked_preds
 
@@ -307,12 +328,12 @@ def loop(
     scheduler: torch.optim.lr_scheduler.LRScheduler,
     metric: dict | None,
     n_epochs: int,
-    print_metrics: bool = True,
     use_wandb: bool = False,
     save_checkpoint: bool = False,
     checkpoint_dir: str | None = None,
     uid: str | None = None,
     validation_n_epochs: int = 25,
+    log_metrics: bool = True,
 ) -> None:
     """
     Main training loop with validation.
@@ -335,8 +356,10 @@ def loop(
         Metric configuration for evaluation
     n_epochs : int
         Number of training epochs
-    print_metrics : bool, optional
-        Whether to print metrics during training, by default True
+    print_stdout : bool, optional
+        Whether to print metrics to stdout, by default True
+    log_metrics : bool, optional
+        Whether to log metrics to file, by default True
     use_wandb : bool, optional
         Whether to log to Weights & Biases, by default False
     save_checkpoint : bool, optional
@@ -351,7 +374,7 @@ def loop(
     valid_metrics, _, _ = iterate(
         model,
         valid_dataloaders,
-        loss_fns=dict(),
+        loss_fns=loss_fns,
         optimizer=None,
         metric=metric,
     )
@@ -359,7 +382,7 @@ def loop(
     track(
         metrics=valid_metrics,
         model=model,
-        print_metrics=print_metrics,
+        log_metrics=log_metrics,
         use_wandb=use_wandb,
         save_checkpoint=False,
         checkpoint_dir=checkpoint_dir,
@@ -367,6 +390,7 @@ def loop(
         n_epochs=n_epochs,
         optimizer=optimizer,
         scheduler=scheduler,
+        is_validation=True,
     )
 
     for i in range(n_epochs):
@@ -387,7 +411,7 @@ def loop(
         track(
             metrics=train_metrics,
             model=model,
-            print_metrics=print_metrics,
+            log_metrics=log_metrics,
             use_wandb=use_wandb,
             save_checkpoint=save_checkpoint,
             checkpoint_dir=checkpoint_dir,
@@ -401,7 +425,7 @@ def loop(
             valid_metrics, _, _ = iterate(
                 model,
                 valid_dataloaders,
-                loss_fns=dict(),
+                loss_fns=loss_fns,
                 optimizer=None,
                 metric=metric,
             )
@@ -409,7 +433,7 @@ def loop(
             track(
                 metrics=valid_metrics,
                 model=model,
-                print_metrics=print_metrics,
+                log_metrics=log_metrics,
                 use_wandb=use_wandb,
                 save_checkpoint=False,
                 checkpoint_dir=checkpoint_dir,
@@ -417,6 +441,7 @@ def loop(
                 n_epochs=n_epochs,
                 optimizer=optimizer,
                 scheduler=scheduler,
+                is_validation=True,
             )
 
         if train_metrics["grad_norm"] < 1e-5 or np.isnan(train_metrics["loss"]):

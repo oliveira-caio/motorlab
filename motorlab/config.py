@@ -12,6 +12,8 @@ IMPORTANT NOTES:
 - String keys that can be dictionaries: 'loss_fn', 'metric', 'in_modalities', 'out_modalities'
 """
 
+import warnings
+
 from pathlib import Path
 
 import yaml
@@ -38,7 +40,7 @@ def load_default(experiment: str, sessions: list[str]) -> dict:
         # CORE DATA & EXPERIMENT CONFIGURATION
         # =================================================================
         # Path of the data. This should be relative to the project root.
-        "data_dir": f"data/{experiment}",
+        "data_dir": "data",
         # Options for experiment: 'gbyk' and 'pg'
         "experiment": experiment,
         "sessions": sessions,
@@ -74,7 +76,7 @@ def load_default(experiment: str, sessions: list[str]) -> dict:
             "architecture": "fc",
             "embedding_dim": 256,
             "hidden_dim": 256,
-            "n_layers": 1,
+            "n_layers": 3,
             # READOUT CONFIGURATION (can be string or dict)
             # Options: "linear", "softplus"
             # Multi-modal example:
@@ -92,11 +94,12 @@ def load_default(experiment: str, sessions: list[str]) -> dict:
         # =================================================================
         "training": {
             # Maximum number of training epochs
-            "n_epochs": 250,
+            "n_epochs": 500,
             # Learning rate
-            "lr": 5e-3,
+            "lr": 1e-3,
             # Options for scheduler: "step_lr", "cosine_annealing"
-            "scheduler": "step_lr",
+            "scheduler": "cosine_annealing",
+            "eta_min": 1e-4,
         },
         # =================================================================
         # DATASET CONFIGURATION
@@ -145,8 +148,8 @@ def load_default(experiment: str, sessions: list[str]) -> dict:
             "representation": "com_vec",
         },
         "spikes": {
-            # Options for brain area: "m1", "pmd", "dlpfc"
-            "brain_area": "m1",
+            # Options for brain area: "all", "m1", "pmd", "dlpfc"
+            "brain_area": "all",
         },
         # =================================================================
         # CHECKPOINT & CONFIG MANAGEMENT
@@ -154,11 +157,9 @@ def load_default(experiment: str, sessions: list[str]) -> dict:
         # Whether to save model and config
         "save": True,
         # Directory for saving checkpoints
-        "checkpoint_dir": "checkpoint/poses_to_position",
+        "checkpoint_dir": "artifacts/checkpoint/poses_to_position",
         # Directory for saving configs
-        "config_dir": "config/poses_to_position",
-        # Directory for logging
-        "logging_dir": "logs/poses_to_position",
+        "config_dir": "artifacts/config/poses_to_position",
         # LOADING CONFIGURATIONS (for transfer learning or evaluation)
         # Unique identifier for loading specific model
         # "uid": "timestamp",
@@ -179,7 +180,7 @@ def load_default(experiment: str, sessions: list[str]) -> dict:
         # =================================================================
         "track": {
             # Print metrics during training
-            "metrics": True,
+            "stdout": True,
             # Log to Weights & Biases
             "wandb": False,
             # Save checkpoints during training
@@ -204,7 +205,7 @@ def save(config: dict) -> None:
         else config["config_dir"]
     )
     config_dir.mkdir(parents=True, exist_ok=True)
-    config_path = config_dir / f"{config['uid']}.yaml"
+    config_path = config_dir / f"{config['uid']}.yml"
     with open(config_path, "w") as f:
         yaml.safe_dump(config, f)
 
@@ -265,5 +266,15 @@ def preprocess(config: dict) -> dict:
             modality: loss_fn_value
             for modality in processed_config["out_modalities"]
         }
+
+    if "log_dir" not in processed_config:
+        warnings.warn(
+            "log_dir not provided in config. No logging will be performed.",
+            UserWarning,
+            stacklevel=2,
+        )
+        processed_config["track"]["logging"] = False
+    else:
+        processed_config["track"]["logging"] = True
 
     return processed_config

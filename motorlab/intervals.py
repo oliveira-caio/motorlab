@@ -132,7 +132,7 @@ def load(
     data_dir = Path(data_dir)
     period = 1000 // sampling_rate
 
-    intervals_dir = data_dir / session / "intervals"
+    intervals_dir = data_dir / experiment / session / "intervals"
     intervals = []
     tiles = data.load_tiles(
         data_dir,
@@ -292,7 +292,7 @@ def load_all(
 
     for session in sessions:
         tiles = data.load_tiles(data_dir, session, experiment, "tiles")
-        intervals_dir = data_dir / session / "intervals"
+        intervals_dir = data_dir / experiment / session / "intervals"
 
         for interval_file in sorted(intervals_dir.iterdir()):
             with interval_file.open("r") as f:

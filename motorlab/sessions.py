@@ -2,6 +2,14 @@
 # PREDEFINED SESSION LISTS
 # =================================================================
 
+OLD_GBYK = [
+    # Bex
+    "bex_20230623_denoised",
+    # Ken
+    "ken_20230614_denoised",
+    "ken_20230618_denoised",
+]
+
 GBYK = [
     # Bex sessions
     "bex_20230621_spikes_sorted_SES",  # Before condition

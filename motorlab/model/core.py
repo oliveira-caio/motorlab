@@ -1,14 +1,17 @@
 import datetime
+import pprint
 
 import torch
+import wandb
 
 from motorlab import (
+    config as config_module,
     data,
     datasets,
     intervals,
-    utils,
+    logger,
     modules,
-    config as config_module,
+    utils,
 )
 from motorlab.model.training import iterate, iterate_entire_trials, loop
 from motorlab.model.factory import (
@@ -159,11 +162,34 @@ def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
         result["scheduler"] = scheduler
         result["checkpoint_data"] = checkpoint_data
 
-        uid = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-        if "uid" in config:
-            config["old_uid"] = config["uid"]
-        config["uid"] = str(uid)
-        print(f"uid: {uid}")
+        if uid is None:
+            uid = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+            if "uid" in config:
+                config["old_uid"] = config["uid"]
+            config["uid"] = str(uid)
+
+        if config["track"].get("logging", False):
+            uid_msg = f"uid: {config.get('uid', 'None')}"
+            config_msg = f"{pprint.pformat(config, indent=2)}"
+            model_msg = f"{str(model)}"
+            n_params_msg = f"Number of parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}"
+
+            run_logger = logger.create(
+                log_dir=config["log_dir"],
+                uid=uid,
+                console_output=config["track"].get("stdout", True),
+            )
+            run_logger.info(uid_msg)
+            run_logger.info(config_msg)
+            run_logger.info(model_msg)
+            run_logger.info(n_params_msg)
+
+    if config["track"].get("wandb", False):
+        locked_keys = set(wandb.config.keys()) if wandb.run else set()
+        config_for_wandb = {
+            k: v for k, v in config.items() if k not in locked_keys
+        }
+        wandb.config.update(config_for_wandb)
 
     return result
 
@@ -258,7 +284,7 @@ def train(config: dict) -> None:
         scheduler,
         config["metric"],
         config["training"].get("n_epochs", 250),
-        print_metrics=config["track"].get("metrics", False),
+        log_metrics=config["track"].get("logging", True),
         use_wandb=config["track"].get("wandb", False),
         save_checkpoint=config["track"].get("checkpoint", False),
         checkpoint_dir=config.get(
@@ -311,6 +337,7 @@ def evaluate(config: dict) -> tuple[dict, dict, dict]:
         - predictions: Dict mapping sessions to prediction arrays
     """
     config = config_module.preprocess(config)
+    config["track"]["wandb"] = False
 
     test_intervals, train_intervals, valid_intervals = (
         intervals.load_all_by_tiers(
@@ -357,6 +384,7 @@ def evaluate(config: dict) -> tuple[dict, dict, dict]:
             loss_fns,
             optimizer=None,
             metric=config["metric"],
+            is_train=False,
         )
     else:
         metrics, gts, preds = iterate_entire_trials(

@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from motorlab import modules, utils
+from motorlab import logger, modules, utils
 
 
 def load_checkpoint_metadata(
@@ -99,12 +99,6 @@ def create(
         raise ValueError(f"Unknown architecture: {architecture}")
 
     model.to(utils.DEVICE)
-
-    if is_train:
-        n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        print(f"Number of parameters: {n_params:,}")
-        print(model)
-
     return model
 
 

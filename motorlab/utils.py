@@ -1,7 +1,10 @@
 import random
 
+from pathlib import Path
+
 import numpy as np
 import torch
+import yaml
 
 from sklearn.decomposition import PCA
 
@@ -15,6 +18,21 @@ elif torch.backends.mps.is_available():
 else:
     DEVICE = torch.device("cpu")
 
+
+REPRESENTATIONS = [
+    "allocentric",
+    "centered",
+    "egocentric",
+    "trunk",
+    "head",
+    "pc",
+    "loose",
+    "medium",
+    "strict",
+    "draconian",
+]
+
+PCS_PATH = Path("artifacts/tables/analysis_pca")
 
 KEYPOINTS = {
     "gbyk": {
@@ -98,18 +116,6 @@ KEYPOINTS = {
     },
 }
 
-
-COM_KEYPOINTS_IDXS = {
-    experiment: [
-        KEYPOINTS[experiment]["l_hip"],
-        KEYPOINTS[experiment]["r_hip"],
-        KEYPOINTS[experiment]["l_shoulder"],
-        KEYPOINTS[experiment]["r_shoulder"],
-        KEYPOINTS[experiment]["neck"],
-        KEYPOINTS[experiment]["s_tail"],
-    ]
-    for experiment in ["gbyk", "pg"]
-}
 
 EXTRA_KEYPOINTS_IDXS = {
     "gbyk": [
@@ -243,6 +249,31 @@ JOINT_ANGLES_IDXS = {
         ("r_elbow", "r_wrist", "r_hand"),
     ],
 }
+
+
+def indices_com_keypoints(experiment: str) -> list[int]:
+    """
+    Get the indices of keypoints for the specified experiment.
+
+    Parameters
+    ----------
+    experiment : str
+        Name of the experiment (e.g., "gbyk", "old_gbyk", "pg").
+
+    Returns
+    -------
+    list[int]
+        List of keypoint indices for the specified experiment.
+    """
+    com_keypoints = [
+        "l_hip",
+        "r_hip",
+        "l_shoulder",
+        "r_shoulder",
+        "neck",
+        "s_tail",
+    ]
+    return [KEYPOINTS[experiment][key] for key in com_keypoints]
 
 
 def get_neckless_skeleton():
@@ -403,8 +434,40 @@ def project_to_pca(
 
     pca = PCA(n_components=data_.shape[-1])
     pca.fit(data_)
-    data_ = pca.transform(data)
+
+    data_ = transform_with_nans(data, pca)
+
     return data_, pca
+
+
+def transform_with_nans(data: np.ndarray, pca: PCA) -> np.ndarray:
+    """
+    Transform data using PCA, handling NaN values.
+
+    If any feature in a frame is NaN, the entire transformed frame will be NaN.
+    Otherwise, applies normal PCA transformation.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Data array of shape (n_frames, n_features), may contain NaNs.
+    pca : PCA
+        Fitted PCA object.
+
+    Returns
+    -------
+    np.ndarray
+        Transformed data of shape (n_frames, n_components).
+    """
+    transformed = np.full(
+        (data.shape[0], pca.n_components_), np.nan, dtype=np.float32
+    )
+    valid_mask = ~np.isnan(data).any(axis=1)
+
+    if valid_mask.any():
+        transformed[valid_mask] = pca.transform(data[valid_mask])
+
+    return transformed
 
 
 def align_intervals(
@@ -472,3 +535,70 @@ def align_intervals(
             )
 
     return aligned_data
+
+
+def load_pcs_to_exclude(name: str) -> dict[str, list[int]]:
+    with open(PCS_PATH / f"{name}.yml") as f:
+        return yaml.safe_load(f)
+
+
+def setup_representation(
+    config: dict,
+    representation: str,
+    is_old: bool,
+) -> None:
+    """Set up the representation for poses."""
+    prefix = "old_" if is_old else ""
+
+    config["poses"]["representation"] = representation
+    if representation == "trunk":
+        config["poses"]["keypoints_to_exclude"] = [
+            "e_tail",
+            "head",
+            "l_ear",
+            "l_eye",
+            "r_ear",
+            "r_eye",
+            "nose",
+        ]
+    elif representation == "head":
+        config["poses"]["keypoints_to_exclude"] = [
+            "e_tail",
+            "s_tail",
+            "l_hip",
+            "l_knee",
+            "l_ankle",
+            "r_hip",
+            "r_knee",
+            "r_ankle",
+            "l_shoulder",
+            "l_elbow",
+            "l_wrist",
+            "r_shoulder",
+            "r_elbow",
+            "r_wrist",
+        ]
+    elif representation == "pc":
+        config["poses"]["project_to_pca"] = True
+    elif representation == "loose":
+        config["poses"]["project_to_pca"] = True
+        config["poses"]["pcs_to_exclude"] = load_pcs_to_exclude(
+            prefix + "loose"
+        )
+    elif representation == "medium":
+        config["poses"]["project_to_pca"] = True
+        config["poses"]["pcs_to_exclude"] = load_pcs_to_exclude(
+            prefix + "medium"
+        )
+    elif representation == "strict":
+        config["poses"]["project_to_pca"] = True
+        config["poses"]["pcs_to_exclude"] = load_pcs_to_exclude(
+            prefix + "strict"
+        )
+    elif representation == "draconian":
+        config["poses"]["project_to_pca"] = True
+        config["poses"]["pcs_to_exclude"] = load_pcs_to_exclude(
+            prefix + "draconian"
+        )
+    else:
+        raise ValueError(f"Unknown representation: {representation}")

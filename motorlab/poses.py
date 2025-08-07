@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import utils
+from motorlab import utils
 
 
 def compute_speed(poses, representation, experiment):
@@ -32,7 +32,7 @@ def compute_speed(poses, representation, experiment):
         speed[1:] = np.diff(poses, axis=0)
     elif representation == "com_vec":
         poses = poses.reshape(duration, n_3d_keypoints // 3, 3)
-        com = poses[:, utils.COM_KEYPOINTS_IDXS[experiment]].mean(axis=1)
+        com = poses[:, utils.indices_com_keypoints(experiment)].mean(axis=1)
         speed = np.zeros_like(com)
         speed[1:] = np.diff(com, axis=0)
     elif representation == "kps_mag":
@@ -42,7 +42,7 @@ def compute_speed(poses, representation, experiment):
         )
     elif representation == "com_mag":
         poses = poses.reshape(duration, n_3d_keypoints // 3, 3)
-        com = poses[:, utils.COM_KEYPOINTS_IDXS[experiment]].mean(axis=1)
+        com = poses[:, utils.indices_com_keypoints(experiment)].mean(axis=1)
         speed = np.zeros((com.shape[0], 1))
         speed[1:] = np.linalg.norm(np.diff(com, axis=0), axis=1, keepdims=True)
     else:
@@ -88,7 +88,7 @@ def compute_com(poses, experiment: str):
     """
     duration, n_3d_keypoints = poses.shape
     poses = poses.reshape(duration, n_3d_keypoints // 3, 3)
-    com = poses[:, utils.COM_KEYPOINTS_IDXS[experiment], :2].mean(axis=1)
+    com = poses[:, utils.indices_com_keypoints(experiment), :2].mean(axis=1)
     return com
 
 
@@ -114,7 +114,14 @@ def change_representation(data, representation, experiment):
         new_poses = compute_allocentric(data, experiment)
     elif representation == "centered":
         new_poses = compute_centered(data, experiment)
-    elif representation == "egocentric":
+    elif representation in {
+        "egocentric",
+        "pc",
+        "loose",
+        "medium",
+        "strict",
+        "draconian",
+    }:
         new_poses = compute_egocentric(data, experiment)
     elif representation == "distances":
         new_poses = compute_distances(data, experiment)

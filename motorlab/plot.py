@@ -342,12 +342,13 @@ def poses3d(
 
 
 def com(
-    data_dir,
-    sessions=None,
-    ncols=3,
-    include_trial=True,
-    include_homing=False,
-    save_path=None,
+    data_dir: str | Path,
+    sessions: list[str] | None = None,
+    experiment: str = "gbyk",
+    ncols: int = 3,
+    include_trial: bool = True,
+    include_homing: bool = False,
+    save_path: str | None = None,
 ):
     """
     Plot center of mass (COM) trajectories for each session.
@@ -355,7 +356,7 @@ def com(
     Parameters
     ----------
     data_dir : str or Path
-        Directory containing session data.
+        Directory path for where the data is. If sessions is None, then assumes `data_dir` is a specific single session directory.
     sessions : list of str, optional
         List of session names. Default is None (use directory name).
     ncols : int, optional
@@ -368,9 +369,12 @@ def com(
         Path to save the figure. Default is None.
     """
     data_dir = Path(data_dir)
+    experiment_dir = data_dir / experiment
+
     if sessions is None:
         sessions = [data_dir.name]
-        data_dir = data_dir.parent
+        experiment_dir = data_dir.parent
+        data_dir = experiment_dir.parent
 
     n_sessions = len(sessions)
     ncols = min(ncols, n_sessions)
@@ -387,15 +391,15 @@ def com(
     axs = axs.flat
 
     for i, session in enumerate(sessions):
-        poses_dir = data_dir / session / "poses"
+        poses_dir = experiment_dir / session / "poses"
         poses_ = data.load_from_memmap(poses_dir)
         poses_ = poses_.reshape(-1, 21, 3)
-        com = poses_[:, utils.COM_KEYPOINTS_IDXS["gbyk"], :2].mean(axis=1)
+        com = poses_[:, utils.indices_com_keypoints("gbyk"), :2].mean(axis=1)
 
         _intervals = intervals.load(
-            data_dir,
-            session,
-            experiment="gbyk",
+            data_dir=data_dir,
+            session=session,
+            experiment=experiment,
             include_trial=include_trial,
             include_homing=include_homing,
         )

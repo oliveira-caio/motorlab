@@ -241,11 +241,13 @@ def intervals(session_dir: Path | str, threshold: int = 60000) -> None:
     """
     session_dir = Path(session_dir)
     session_name = session_dir.name
-    data_dir = session_dir.parent
+    experiment_dir = session_dir.parent
     intervals_dir = session_dir / "intervals"
     intervals_dir.mkdir(exist_ok=True, parents=True)
 
-    trials_info = _load_and_filter_trials(data_dir / f"{session_name}.csv")
+    trials_info = _load_and_filter_trials(
+        experiment_dir / f"{session_name}.csv"
+    )
     trials_info = _process_reward(trials_info)
     trials_info = _create_homing_intervals(trials_info, threshold=threshold)
     trials_info = _assign_cue_time(trials_info)
@@ -287,7 +289,7 @@ def spikes(session_dir: Path | str, sampling_rate: int = 20) -> None:
         None
     """
     session_dir = Path(session_dir)
-    data_dir = session_dir.parent
+    experiment_dir = session_dir.parent
 
     spikes_dir = session_dir / "spikes"
     spikes_dir.mkdir(exist_ok=True, parents=True)
@@ -302,7 +304,7 @@ def spikes(session_dir: Path | str, sampling_rate: int = 20) -> None:
     spike_count_meta_dir.mkdir(exist_ok=True, parents=True)
 
     filename = session_dir.name
-    dataset = h5py.File(f"{data_dir}/{filename}.mat")
+    dataset = h5py.File(f"{experiment_dir}/{filename}.mat")
 
     ### spikes
     spikes = np.array(dataset["spikes"]["session"][:])
@@ -378,6 +380,23 @@ def spikes(session_dir: Path | str, sampling_rate: int = 20) -> None:
     shutil.copytree(spikes_meta_dir, spike_count_meta_dir, dirs_exist_ok=True)
 
 
+def _apply_coordinate_transformation(
+    x_axis: np.ndarray,
+    y_axis: np.ndarray,
+    z_axis: np.ndarray,
+    old_format: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if old_format:
+        x_axis = room.y_size * (x_axis + (room.x_size / room.y_size / 2))
+        y_axis = room.y_size * y_axis
+        z_axis = room.y_size * z_axis
+    else:
+        x_axis = -x_axis + room.x_size
+        y_axis = y_axis
+        z_axis = z_axis
+    return x_axis, y_axis, z_axis
+
+
 def poses(session_dir: Path | str, old_format: bool = False) -> None:
     """Extract and save pose/motion tracking data from HDF5 file.
 
@@ -396,35 +415,47 @@ def poses(session_dir: Path | str, old_format: bool = False) -> None:
         The x-axis is flipped for new format data to correct coordinate system conversion.
     """
     session_dir = Path(session_dir)
-    data_dir = session_dir.parent
+    experiment_dir = session_dir.parent
     poses_dir = session_dir / "poses"
     poses_dir.mkdir(exist_ok=True, parents=True)
     meta_dir = poses_dir / "meta"
     meta_dir.mkdir(exist_ok=True, parents=True)
 
     file_name = session_dir.name
-    file_path = Path(f"{data_dir}/{file_name}.mat")
+    file_path = Path(f"{experiment_dir}/{file_name}.mat")
     dataset = h5py.File(file_path)
-
-    ### coords
-    # first five joints are useless for the denoised datasets
-    if old_format:
-        x_com = np.array(dataset["spikes"]["Traj"]["x"][0])
-        x_coords = np.array(dataset["spikes"]["Body"]["x"][5:])
-        y_coords = np.array(dataset["spikes"]["Body"]["y"][5:])
-        z_coords = np.array(dataset["spikes"]["Body"]["z"][5:])
-    else:
-        x_com = -np.array(dataset["spikes"]["Traj"]["x"][0]) + room.x_size
-        x_coords = -np.array(dataset["spikes"]["Body"]["x"]) + room.x_size
-        y_coords = np.array(dataset["spikes"]["Body"]["y"])
-        z_coords = np.array(dataset["spikes"]["Body"]["z"])
 
     ### center of mass
     with open(meta_dir / "com.npy", "wb") as f:
+        x_com = np.array(dataset["spikes"]["Traj"]["x"][0])
         y_com = np.array(dataset["spikes"]["Traj"]["y"][0])
         z_com = np.array(dataset["spikes"]["Traj"]["z"][0])
+        x_com, y_com, z_com = _apply_coordinate_transformation(
+            x_com,
+            y_com,
+            z_com,
+            old_format,
+        )
         com = np.stack([x_com, y_com, z_com], axis=0).T
         np.save(f, com)
+
+    ### coords
+    x_coords = np.array(dataset["spikes"]["Body"]["x"])
+    y_coords = np.array(dataset["spikes"]["Body"]["y"])
+    z_coords = np.array(dataset["spikes"]["Body"]["z"])
+
+    if old_format:
+        # first 5 keypoints are metadata for the old (denoised) datasets.
+        x_coords = x_coords[5:]
+        y_coords = y_coords[5:]
+        z_coords = z_coords[5:]
+
+    x_coords, y_coords, z_coords = _apply_coordinate_transformation(
+        x_coords,
+        y_coords,
+        z_coords,
+        old_format,
+    )
 
     # after next line the shape is (n_joints, 3, n_frames)
     coords = np.stack([x_coords, y_coords, z_coords], axis=1)
@@ -488,13 +519,15 @@ def target(session_dir: Path | str) -> None:
         meta_responses = yaml.safe_load(f)
         target = np.zeros(meta_responses["n_timestamps"])
 
-    trials_dir = session_dir / "trials"
-    for trial in trials_dir.iterdir():
-        with trial.open("r") as f:
-            trial_info = yaml.safe_load(f)
-            cue_idx = trial_info["cue_frame_idx"]
-            end_idx = trial_info["first_frame_idx"] + trial_info["num_frames"]
-            target[cue_idx:end_idx] = 1 if trial_info["reward"] == "R" else 2
+    intervals_dir = session_dir / "intervals"
+    for interval in intervals_dir.iterdir():
+        with interval.open("r") as f:
+            interval_info = yaml.safe_load(f)
+            cue_idx = interval_info["cue_frame_idx"]
+            end_idx = (
+                interval_info["first_frame_idx"] + interval_info["num_frames"]
+            )
+            target[cue_idx:end_idx] = 1 if interval_info["reward"] == "R" else 2
 
     mmap = np.memmap(
         target_dir / "data.mem",
