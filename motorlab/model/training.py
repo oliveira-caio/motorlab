@@ -1,19 +1,87 @@
+import warnings
+
+from typing import Any
+
 import numpy as np
 import torch
 import wandb
 
 from motorlab import logger, metrics, utils
-from motorlab.model.factory import save_checkpoint as save_ckpt
+from motorlab.model.factory import (
+    save_checkpoint as save_ckpt,
+    compute_gradient_norm,
+)
+
+VALIDATION_FREQUENCY = 25
+GRADIENT_THRESHOLD = 0.5
+
+
+def format_metrics(metrics: dict[str, Any]) -> str:
+    """
+    Format metrics for printing/logging.
+
+    Parameters
+    ----------
+    metrics : dict
+        Dictionary of metric names and values
+
+    Returns
+    -------
+    str
+        Formatted string of metrics
+    """
+    formatted = []
+    epoch_str = None
+    loss_str = None
+    grad_str = None
+    other_metrics = []
+
+    for key, value in metrics.items():
+        if "epoch" in key:
+            epoch_str = f"{key}: {value:04d}"
+        elif "loss" in key:
+            loss_str = (
+                f"  {key}: {value:.4f}"
+                if "val" in key
+                else f"{key}: {value:.4f}"
+            )
+        elif "grad" in key:
+            grad_str = f"{key}: {value:.5f}"
+        elif "mse" in key or "corr" in key:
+            other_metrics.append(
+                f"  {key}: {value:.4f}"
+                if "val" in key
+                else f"{key}: {value:.4f}"
+            )
+        elif "accuracy" in key:
+            other_metrics.append(
+                f"  {key}: {value:.2f}"
+                if "val" in key
+                else f"{key}: {value:.2f}"
+            )
+        else:
+            other_metrics.append(
+                f"  {key}: {value:.4f}"
+                if "val" in key
+                else f"{key}: {value:.4f}"
+            )
+
+    formatted.append(epoch_str)
+    formatted.extend(other_metrics)
+    formatted.append(loss_str)
+    if grad_str:
+        formatted.append(grad_str)
+    return " | ".join(formatted)
 
 
 def track(
     metrics: dict,
     model: torch.nn.Module,
+    uid: str,
+    best_val_loss: dict,
+    checkpoint_dir: str,
     use_wandb: bool = False,
     save_checkpoint: bool = False,
-    checkpoint_dir: str | None = None,
-    uid: str | None = None,
-    n_epochs: int | None = None,
     optimizer: torch.optim.Optimizer | None = None,
     scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
     is_validation: bool = False,
@@ -48,11 +116,14 @@ def track(
         Scheduler for checkpoint saving, by default None
     is_validation : bool, optional
         Whether these are validation metrics (adds 'val_' prefix), by default False
+    best_val_loss : dict
+        Dictionary to track best validation loss for checkpointing, by default None
     """
-    if is_validation:
-        metrics = {
-            f"val_{k}" if k != "epoch" else k: v for k, v in metrics.items()
-        }
+    prefix = "val_" if is_validation else "train_"
+    metrics = {
+        f"{prefix}{k}" if k != "epoch" and k != "grad_norm" else k: v
+        for k, v in metrics.items()
+    }
 
     if log_metrics:
         run_logger = logger.get()
@@ -64,14 +135,11 @@ def track(
 
     if (
         save_checkpoint
-        and checkpoint_dir is not None
-        and uid is not None
-        and n_epochs is not None
-        and metrics["epoch"] != n_epochs
-        and metrics["epoch"] % 25 == 0
-        and metrics["epoch"] != 1
+        and is_validation
+        and metrics["val_loss"] < best_val_loss["value"]
+        and metrics["grad_norm"] < GRADIENT_THRESHOLD
     ):
-        checkpoint_path = f"{checkpoint_dir}/{uid}_{metrics['epoch']}.pt"
+        checkpoint_path = f"{checkpoint_dir}/{uid}.pt"
         save_ckpt(
             model=model,
             checkpoint_path=checkpoint_path,
@@ -79,33 +147,8 @@ def track(
             optimizer=optimizer,
             scheduler=scheduler,
         )
-
-
-def format_metrics(metrics: dict) -> str:
-    """
-    Format metrics for printing/logging.
-
-    Parameters
-    ----------
-    metrics : dict
-        Dictionary of metric names and values
-
-    Returns
-    -------
-    str
-        Formatted string of metrics
-    """
-    formatted = []
-    for key, value in metrics.items():
-        if "loss" in key or "mse" in key or "corr" in key:
-            formatted.append(f"{key}: {value:.4f}")
-        elif "accuracy" in key:
-            formatted.append(f"{key}: {value:.2f}")
-        elif "norm" in key:
-            formatted.append(f"{key}: {value:.8f}")
-        elif "epoch" in key:
-            formatted.append(f"{key}: {value:04d}")
-    return "\t| ".join(reversed(formatted))
+        best_val_loss["value"] = metrics["val_loss"]
+        best_val_loss["saved"] = True
 
 
 def iterate_entire_trials(
@@ -175,26 +218,28 @@ def iterate_entire_trials(
                         preds[session][modality_name] = []
 
                     gts[session][modality_name].append(
-                        y_trial[modality_name].detach().cpu().numpy().squeeze(0)
+                        y_trial[modality_name].squeeze(0)
                     )
                     preds[session][modality_name].append(
-                        trial_pred[modality_name]
-                        .detach()
-                        .cpu()
-                        .numpy()
-                        .squeeze(0)
+                        trial_pred[modality_name].squeeze(0)
                     )
 
     stacked_gts = {
         session: {
-            modality_name: np.concatenate(gts[session][modality_name], axis=0)
+            modality_name: torch.cat(gts[session][modality_name], dim=0)
+            .detach()
+            .cpu()
+            .numpy()
             for modality_name in gts[session]
         }
         for session in gts
     }
     stacked_preds = {
         session: {
-            modality_name: np.concatenate(preds[session][modality_name], axis=0)
+            modality_name: torch.cat(preds[session][modality_name], dim=0)
+            .detach()
+            .cpu()
+            .numpy()
             for modality_name in preds[session]
         }
         for session in preds
@@ -205,7 +250,28 @@ def iterate_entire_trials(
         computed_metrics = metrics.compute(stacked_gts, stacked_preds, metric)
         track_metrics.update(computed_metrics)
 
-    return track_metrics, gts, preds
+    gts_trials = {
+        session: {
+            modality_name: [
+                trial.detach().cpu().numpy()
+                for trial in gts[session][modality_name]
+            ]
+            for modality_name in gts[session]
+        }
+        for session in gts
+    }
+    preds_trials = {
+        session: {
+            modality_name: [
+                trial.detach().cpu().numpy()
+                for trial in preds[session][modality_name]
+            ]
+            for modality_name in preds[session]
+        }
+        for session in preds
+    }
+
+    return track_metrics, gts_trials, preds_trials
 
 
 def iterate(
@@ -246,11 +312,19 @@ def iterate(
     preds = {session: {} for session in dataloaders}
     track_metrics = dict()
     losses = []
-    grad_norms = []
 
-    with torch.set_grad_enabled(is_train):
-        for session in dataloaders:
-            for x_trial, y_trial in dataloaders[session]:
+    session_iterators = {
+        session: iter(dataloader) for session, dataloader in dataloaders.items()
+    }
+    active_sessions = sorted(dataloaders.keys())
+
+    while active_sessions:
+        total_loss = 0
+        sessions_to_remove = []
+
+        for session in active_sessions:
+            try:
+                x_trial, y_trial = next(session_iterators[session])
                 x_trial = {k: v.to(utils.DEVICE) for k, v in x_trial.items()}
                 y_trial = {k: v.to(utils.DEVICE) for k, v in y_trial.items()}
                 pred = model(x_trial, session)
@@ -259,62 +333,60 @@ def iterate(
                     if modality not in gts[session]:
                         gts[session][modality] = []
                         preds[session][modality] = []
-                    gts[session][modality].append(
-                        y_trial[modality].detach().cpu().numpy()
-                    )
-                    preds[session][modality].append(
-                        pred[modality].detach().cpu().numpy()
-                    )
+                    gts[session][modality].append(y_trial[modality])
+                    preds[session][modality].append(pred[modality])
 
                 loss = loss_fns[session](pred, y_trial)
-                losses.append(loss.item())
+                loss.backward()
+                total_loss += loss.item()
 
-                if is_train and optimizer is not None:
-                    optimizer.zero_grad()
-                    loss.backward()
-                    grad_norm = torch.sqrt(
-                        torch.tensor(
-                            sum(
-                                p.grad.norm().item() ** 2
-                                for p in model.parameters()
-                                if p.grad is not None
-                            )
-                        )
-                    ).item()
-                    grad_norms.append(grad_norm)
-                    optimizer.step()
+            except StopIteration:
+                sessions_to_remove.append(session)
 
-        stacked_gts = {
-            session: {
-                modality_name: np.concatenate(
-                    gts[session][modality_name], axis=0
-                )
-                for modality_name in gts[session]
-            }
-            for session in gts
+        if is_train and optimizer is not None:
+            optimizer.step()
+            optimizer.zero_grad()
+
+        avg_loss = total_loss / len(active_sessions)
+        losses.append(avg_loss)
+
+        active_sessions = [
+            session
+            for session in active_sessions
+            if session not in sessions_to_remove
+        ]
+
+    stacked_gts = {
+        session: {
+            modality_name: torch.cat(gts[session][modality_name], dim=0)
+            .detach()
+            .cpu()
+            .numpy()
+            for modality_name in gts[session]
         }
+        for session in gts
+    }
 
-        stacked_preds = {
-            session: {
-                modality_name: np.concatenate(
-                    preds[session][modality_name], axis=0
-                )
-                for modality_name in preds[session]
-            }
-            for session in preds
+    stacked_preds = {
+        session: {
+            modality_name: torch.cat(preds[session][modality_name], dim=0)
+            .detach()
+            .cpu()
+            .numpy()
+            for modality_name in preds[session]
         }
+        for session in preds
+    }
 
-        if metric is not None:
-            computed_metrics = metrics.compute(
-                stacked_gts, stacked_preds, metric
-            )
-            track_metrics.update(computed_metrics)
+    if metric is not None:
+        computed_metrics = metrics.compute(stacked_gts, stacked_preds, metric)
+        track_metrics.update(computed_metrics)
 
-        if losses:
-            track_metrics["loss"] = np.mean(losses)
+    track_metrics["loss"] = np.mean(losses)
 
-        if grad_norms:
-            track_metrics["grad_norm"] = np.mean(grad_norms)
+    if not is_train:
+        track_metrics["grad_norm"] = compute_gradient_norm(model)
+        model.zero_grad()
 
     return track_metrics, stacked_gts, stacked_preds
 
@@ -327,12 +399,11 @@ def loop(
     optimizer: torch.optim.Optimizer,
     scheduler: torch.optim.lr_scheduler.LRScheduler,
     metric: dict | None,
+    uid: str,
     n_epochs: int,
+    checkpoint_dir: str,
     use_wandb: bool = False,
     save_checkpoint: bool = False,
-    checkpoint_dir: str | None = None,
-    uid: str | None = None,
-    validation_n_epochs: int = 25,
     log_metrics: bool = True,
 ) -> None:
     """
@@ -356,20 +427,16 @@ def loop(
         Metric configuration for evaluation
     n_epochs : int
         Number of training epochs
-    print_stdout : bool, optional
-        Whether to print metrics to stdout, by default True
     log_metrics : bool, optional
         Whether to log metrics to file, by default True
     use_wandb : bool, optional
         Whether to log to Weights & Biases, by default False
     save_checkpoint : bool, optional
         Whether to save checkpoints, by default False
-    checkpoint_dir : str | None, optional
+    checkpoint_dir : str
         Directory to save checkpoints, by default None
-    uid : str | None, optional
+    uid : str
         Unique identifier for saving, by default None
-    validation_n_epochs : int, optional
-        Run validation every N epochs, by default 25
     """
     valid_metrics, _, _ = iterate(
         model,
@@ -378,7 +445,8 @@ def loop(
         optimizer=None,
         metric=metric,
     )
-    valid_metrics["epoch"] = 1
+    valid_metrics["epoch"] = 0
+    best_val_loss = {"value": valid_metrics["loss"], "saved": False}
     track(
         metrics=valid_metrics,
         model=model,
@@ -387,15 +455,13 @@ def loop(
         save_checkpoint=False,
         checkpoint_dir=checkpoint_dir,
         uid=uid,
-        n_epochs=n_epochs,
         optimizer=optimizer,
         scheduler=scheduler,
         is_validation=True,
+        best_val_loss=best_val_loss,
     )
 
-    for i in range(n_epochs):
-        display_epoch = i + 1
-
+    for i in range(1, n_epochs + 1):
         train_metrics, _, _ = iterate(
             model,
             train_dataloaders,
@@ -404,10 +470,8 @@ def loop(
             metric,
             is_train=True,
         )
-
         scheduler.step()
-
-        train_metrics["epoch"] = display_epoch
+        train_metrics["epoch"] = i
         track(
             metrics=train_metrics,
             model=model,
@@ -416,12 +480,12 @@ def loop(
             save_checkpoint=save_checkpoint,
             checkpoint_dir=checkpoint_dir,
             uid=uid,
-            n_epochs=n_epochs,
             optimizer=optimizer,
             scheduler=scheduler,
+            best_val_loss=best_val_loss,
         )
 
-        if ((i + 1) % validation_n_epochs) == 0:
+        if (i % VALIDATION_FREQUENCY) == 0:
             valid_metrics, _, _ = iterate(
                 model,
                 valid_dataloaders,
@@ -429,20 +493,27 @@ def loop(
                 optimizer=None,
                 metric=metric,
             )
-            valid_metrics["epoch"] = display_epoch
+            valid_metrics["epoch"] = i
             track(
                 metrics=valid_metrics,
                 model=model,
                 log_metrics=log_metrics,
                 use_wandb=use_wandb,
-                save_checkpoint=False,
+                save_checkpoint=save_checkpoint,
                 checkpoint_dir=checkpoint_dir,
                 uid=uid,
-                n_epochs=n_epochs,
                 optimizer=optimizer,
                 scheduler=scheduler,
                 is_validation=True,
+                best_val_loss=best_val_loss,
             )
 
-        if train_metrics["grad_norm"] < 1e-5 or np.isnan(train_metrics["loss"]):
+        if np.isnan(train_metrics["loss"]):
             break
+
+    if save_checkpoint and not best_val_loss["saved"]:
+        warnings.warn(
+            "No checkpoint saved since validation loss never improved with gradient norm < "
+            f"{GRADIENT_THRESHOLD}",
+            UserWarning,
+        )

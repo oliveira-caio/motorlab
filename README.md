@@ -5,7 +5,5 @@ this package contains all the tools i've used and all the experiments i've tried
 - add a nondeterministic dataset by selecting the starting points of the sequences randomly.
 - figure out a good way to train models with sequences of varying length.
 - add early stop such that, if the main metric doesn't improve in 50 iterations, it stops.
-- add logging for training so that i can check what was the best validation epoch for a given run.
-- check if it's possible to not have one dataset per session, but instead add the session as a third component of the tensors.
 - change from position to location and load the location from poses/meta/com.npy.
 - implement load function per session and make all load functions use it.

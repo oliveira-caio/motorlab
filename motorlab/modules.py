@@ -233,14 +233,14 @@ class FCModel(torch.nn.Module):
             self.core.append(
                 torch.nn.Sequential(
                     torch.nn.Linear(embedding_dim, hidden_dim),
-                    torch.nn.ReLU(),
+                    torch.nn.GELU(),
                 )
             )
             self.core.extend(
                 [
                     torch.nn.Sequential(
                         torch.nn.Linear(hidden_dim, hidden_dim),
-                        torch.nn.ReLU(),
+                        torch.nn.GELU(),
                     )
                     for _ in range(n_layers - 1)
                 ]

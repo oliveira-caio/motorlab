@@ -545,10 +545,10 @@ def load_pcs_to_exclude(name: str) -> dict[str, list[int]]:
 def setup_representation(
     config: dict,
     representation: str,
-    is_old: bool,
+    old_gbyk: bool,
 ) -> None:
     """Set up the representation for poses."""
-    prefix = "old_" if is_old else ""
+    prefix = "old_" if old_gbyk else ""
 
     config["poses"]["representation"] = representation
     if representation == "trunk":

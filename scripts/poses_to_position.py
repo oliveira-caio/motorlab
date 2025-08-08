@@ -28,7 +28,7 @@ from scripts.main import setup_base_parser, configure_logging_behavior
 
 
 REPRESENTATION = "pc"
-IS_OLD = False
+OLD_GBYK = False
 SWEEP_CONFIG = {
     "method": "grid",
     "metric": {"name": "val_mse", "goal": "minimize"},
@@ -40,15 +40,16 @@ SWEEP_CONFIG = {
 
 def load_base_config() -> dict:
     """Get the base configuration for poses_to_position training."""
-    sessions = ml.sessions.OLD_GBYK if IS_OLD else ml.sessions.GBYK
-    experiment = "old_gbyk" if IS_OLD else "gbyk"
+    sessions = ml.sessions.OLD_GBYK if OLD_GBYK else ml.sessions.GBYK
+    experiment = "old_gbyk" if OLD_GBYK else "gbyk"
     config = ml.config.load_default(experiment, sessions)
 
     config["log_dir"] = "artifacts/logs/poses_to_position/"
     config["model"]["n_layers"] = 5
-    config["intervals"]["include_homing"] = not IS_OLD
+    config["intervals"]["include_homing"] = not OLD_GBYK
+    config["training"]["n_epochs"] = 2000
 
-    ml.utils.setup_representation(config, REPRESENTATION, IS_OLD)
+    ml.utils.setup_representation(config, REPRESENTATION, OLD_GBYK)
 
     return config
 
@@ -65,7 +66,7 @@ def train_single_run():
         ml.utils.setup_representation(
             config,
             sweep_config["representation"],
-            IS_OLD,
+            OLD_GBYK,
         )
 
     # ! WARNING: changes in-place

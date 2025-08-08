@@ -276,21 +276,21 @@ def train(config: dict) -> None:
     )
 
     loop(
-        model,
-        train_dataloaders,
-        valid_dataloaders,
-        loss_fns,
-        optimizer,
-        scheduler,
-        config["metric"],
-        config["training"].get("n_epochs", 250),
-        log_metrics=config["track"].get("logging", True),
-        use_wandb=config["track"].get("wandb", False),
-        save_checkpoint=config["track"].get("checkpoint", False),
+        model=model,
+        train_dataloaders=train_dataloaders,
+        valid_dataloaders=valid_dataloaders,
+        loss_fns=loss_fns,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        metric=config["metric"],
+        uid=config["uid"],
+        n_epochs=config["training"].get("n_epochs", 250),
         checkpoint_dir=config.get(
             "checkpoint_save_dir", config["checkpoint_dir"]
         ),
-        uid=config["uid"],
+        use_wandb=config["track"].get("wandb", False),
+        save_checkpoint=config["track"].get("checkpoint", False),
+        log_metrics=config["track"].get("logging", True),
     )
 
     if config.get("save", False):

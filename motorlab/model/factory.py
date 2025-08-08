@@ -5,7 +5,33 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from motorlab import logger, modules, utils
+from motorlab import modules, utils
+
+
+def compute_gradient_norm(model: torch.nn.Module) -> float:
+    """
+    Compute the L2 norm of gradients for all parameters in the model.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Model with computed gradients
+
+    Returns
+    -------
+    float
+        L2 norm of all gradients
+    """
+    total_norm = torch.sqrt(
+        torch.tensor(
+            sum(
+                p.grad.norm().item() ** 2
+                for p in model.parameters()
+                if p.grad is not None
+            )
+        )
+    ).item()
+    return total_norm
 
 
 def load_checkpoint_metadata(
