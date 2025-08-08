@@ -1,7 +1,5 @@
-# Import main API functions
-from .core import train, evaluate, setup
-
-# Import training functions
+from .orchestration import train, evaluate
+from .core import setup
 from .training import (
     iterate,
     iterate_entire_trials,
@@ -9,8 +7,6 @@ from .training import (
     track,
     format_metrics,
 )
-
-# Import factory functions
 from .factory import (
     create,
     load_model,
@@ -19,9 +15,10 @@ from .factory import (
     compute_mean,
     dump_outputs,
     compute_dimensions,
+    register_model,
+    get_available_architectures,
 )
 
-# Keep the same API - these are the main entry points
 __all__ = [
     # Main API
     "train",
@@ -41,4 +38,6 @@ __all__ = [
     "compute_mean",
     "compute_dimensions",
     "dump_outputs",
+    "register_model",
+    "get_available_architectures",
 ]

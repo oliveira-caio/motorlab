@@ -105,6 +105,13 @@ def load_default(experiment: str, sessions: list[str]) -> dict:
             #     "patience": 10,
             #     "min_lr": 1e-5,
             # },
+            "early_stopping": {
+                "enabled": False,
+                "patience": 6,
+                "min_delta": 0.0,
+                "gradient_threshold": 0.5,
+            },
+            "validation": {"frequency": 25, "gradient_threshold": 0.5},
         },
         # =================================================================
         # DATASET CONFIGURATION

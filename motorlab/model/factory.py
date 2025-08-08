@@ -1,3 +1,4 @@
+import inspect
 import os
 
 from pathlib import Path
@@ -6,6 +7,39 @@ import numpy as np
 import torch
 
 from motorlab import modules, utils
+
+
+MODEL_REGISTRY = {
+    "gru": modules.GRUModel,
+    "fc": modules.FCModel,
+    "linreg": modules.LinRegModel,
+}
+
+
+def register_model(name: str, model_class):
+    """
+    Register a new model architecture in the factory.
+
+    Parameters
+    ----------
+    name : str
+        Name identifier for the model architecture
+    model_class : class
+        Model class to register
+    """
+    MODEL_REGISTRY[name] = model_class
+
+
+def get_available_architectures() -> list[str]:
+    """
+    Get list of available model architectures.
+
+    Returns
+    -------
+    list[str]
+        List of registered architecture names
+    """
+    return list(MODEL_REGISTRY.keys())
 
 
 def compute_gradient_norm(model: torch.nn.Module) -> float:
@@ -63,62 +97,47 @@ def load_checkpoint_metadata(
 def create(
     architecture: str,
     sessions: list[str],
-    readout_map: dict,
     model_dict: dict,
-    is_train: bool = True,
 ) -> torch.nn.Module:
     """
     Create a model based on the specified architecture and parameters.
+    
+    Uses automatic parameter inspection to filter model_dict to only include
+    parameters that the target model class actually accepts.
 
     Parameters
     ----------
     architecture : str
-        Model architecture name ('gru', 'fc', 'linreg')
+        Model architecture name (see get_available_architectures())
     sessions : list[str]
         List of session names
-    readout_map : dict
-        Mapping from modality to readout type
     model_dict : dict
         Model-specific parameters including dimensions, layers, etc.
-    is_train : bool, optional
-        Whether creating for training (affects whether model summary is printed), by default True
 
     Returns
     -------
     torch.nn.Module
         Created model on the specified device
-    """
-    if architecture == "gru":
-        model = modules.GRUModel(
-            sessions=sessions,
-            in_dim=model_dict["in_dim"],
-            embedding_dim=model_dict["embedding_dim"],
-            hidden_dim=model_dict["hidden_dim"],
-            out_dim=model_dict["out_dim"],
-            n_layers=model_dict["n_layers"],
-            readout_map=readout_map,
-            dropout=model_dict.get("dropout", 0.0),
-            bidirectional=model_dict.get("bidirectional", True),
-        )
-    elif architecture == "fc":
-        model = modules.FCModel(
-            sessions=sessions,
-            in_dim=model_dict["in_dim"],
-            embedding_dim=model_dict["embedding_dim"],
-            hidden_dim=model_dict["hidden_dim"],
-            out_dim=model_dict["out_dim"],
-            n_layers=model_dict["n_layers"],
-            readout_map=readout_map,
-        )
-    elif architecture == "linreg":
-        model = modules.LinRegModel(
-            sessions=sessions,
-            in_dim=model_dict["in_dim"],
-            out_dim=model_dict["out_dim"],
-        )
-    else:
-        raise ValueError(f"Unknown architecture: {architecture}")
 
+    Raises
+    ------
+    ValueError
+        If architecture is not registered in MODEL_REGISTRY
+    """
+    if architecture not in MODEL_REGISTRY:
+        available = ", ".join(get_available_architectures())
+        raise ValueError(f"Unknown architecture: '{architecture}'. Available: {available}")
+    
+    model_class = MODEL_REGISTRY[architecture]
+    
+    # Get valid parameters from the class constructor
+    sig = inspect.signature(model_class.__init__)
+    valid_params = set(sig.parameters.keys()) - {"self"}
+    
+    # Filter model_dict to only include valid parameters
+    kwargs = {k: v for k, v in model_dict.items() if k in valid_params}
+    
+    model = model_class(sessions=sessions, **kwargs)
     model.to(utils.DEVICE)
     return model
 
@@ -126,7 +145,6 @@ def create(
 def load_model(
     architecture: str,
     sessions: list[str],
-    readout_map: dict,
     model_dict: dict,
     checkpoint_data: dict,
     freeze: bool = False,
@@ -141,8 +159,6 @@ def load_model(
         Model architecture name
     sessions : list[str]
         List of session names
-    readout_map : dict
-        Mapping from modality to readout type
     model_dict : dict
         Model-specific parameters
     checkpoint_data : dict
@@ -157,7 +173,7 @@ def load_model(
     torch.nn.Module
         Loaded model on the specified device
     """
-    model = create(architecture, sessions, readout_map, model_dict, is_train)
+    model = create(architecture, sessions, model_dict)
     model.load_state_dict(checkpoint_data["model_state_dict"])
 
     if freeze:

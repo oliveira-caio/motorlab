@@ -5,22 +5,68 @@ import warnings
 import torch
 import wandb
 
-from motorlab import (
-    config as config_module,
-    datasets,
-    intervals,
-    logger,
-    modules,
-    utils,
-)
-from motorlab.model.training import iterate, iterate_entire_trials, loop
+from motorlab import logger, modules, utils
 from motorlab.model.factory import (
     compute_dimensions,
     create,
     load_model,
-    save_checkpoint,
     load_checkpoint_metadata,
 )
+
+
+class EarlyStopping:
+    """
+    Early stopping utility to halt training when validation loss stops improving.
+
+    Parameters
+    ----------
+    patience : int
+        Number of validation checks to wait for improvement before stopping
+    min_delta : float
+        Minimum change in validation loss to qualify as improvement
+    gradient_threshold : float
+        Only consider improvements when gradient norm is below this threshold
+    """
+
+    def __init__(
+        self,
+        patience: int = 6,
+        min_delta: float = 0.0,
+        gradient_threshold: float = 0.5,
+    ):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.gradient_threshold = gradient_threshold
+        self.best_loss = float("inf")
+        self.patience_counter = 0
+
+    def should_stop(self, val_loss: float, grad_norm: float) -> bool:
+        """
+        Check if training should stop based on validation loss and gradient norm.
+
+        Parameters
+        ----------
+        val_loss : float
+            Current validation loss
+        grad_norm : float
+            Current gradient norm
+
+        Returns
+        -------
+        bool
+            True if training should stop, False otherwise
+        """
+        # Only consider improvement if gradients are stable
+        if grad_norm >= self.gradient_threshold:
+            return False
+
+        if val_loss < self.best_loss - self.min_delta:
+            self.best_loss = val_loss
+            self.patience_counter = 0
+        else:
+            self.patience_counter += 1
+
+        return self.patience_counter >= self.patience
 
 
 def create_optimizer(model, optimizer_config: dict) -> torch.optim.Optimizer:
@@ -104,6 +150,30 @@ def create_scheduler(
     else:
         warnings.warn("It will use a constant learning rate.")
         return None
+
+
+def create_early_stopping(early_stopping_config: dict) -> EarlyStopping | None:
+    """
+    Create an early stopping instance based on configuration.
+
+    Parameters
+    ----------
+    early_stopping_config : dict
+        Early stopping configuration with 'enabled' and optional parameters
+
+    Returns
+    -------
+    EarlyStopping | None
+        Configured early stopping instance or None if disabled
+    """
+    if not early_stopping_config.get("enabled", False):
+        return None
+
+    return EarlyStopping(
+        patience=early_stopping_config.get("patience", 6),
+        min_delta=early_stopping_config.get("min_delta", 0.0),
+        gradient_threshold=early_stopping_config.get("gradient_threshold", 0.5),
+    )
 
 
 def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
@@ -193,9 +263,7 @@ def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
         model = create(
             architecture=config["model"]["architecture"],
             sessions=config["sessions"],
-            readout_map=config["model"]["readout_map"],
             model_dict=model_dict,
-            is_train=is_train,
         )
         checkpoint_data = None
 
@@ -213,6 +281,9 @@ def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
     if is_train:
         optimizer = create_optimizer(model, config["training"]["optimizer"])
         scheduler = create_scheduler(optimizer, config["training"]["scheduler"])
+        early_stopping = create_early_stopping(
+            config["training"]["early_stopping"]
+        )
 
         if checkpoint_data is not None:
             if "optimizer_state_dict" in checkpoint_data:
@@ -228,6 +299,7 @@ def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
 
         result["optimizer"] = optimizer
         result["scheduler"] = scheduler
+        result["early_stopping"] = early_stopping
         result["checkpoint_data"] = checkpoint_data
 
         if uid is None:
@@ -260,206 +332,3 @@ def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
         wandb.config.update(config_for_wandb)
 
     return result
-
-
-def train(config: dict) -> None:
-    """
-    Train a model using the provided configuration.
-
-    This function sets up the data pipeline, model, and training process based
-    on the provided configuration. It handles dataset creation, dataloader
-    setup, optimizer initialization, and the main training loop.
-
-    Parameters
-    ----------
-    config : dict
-        Configuration dictionary containing:
-        - data_dir: Path to data directory
-        - sessions: List of session names to include
-        - experiment: Experiment identifier
-        - intervals: Interval configuration for data splitting
-        - model: Model architecture and parameters
-        - dataset: dataset configuration (batch_size, seq_length, etc.)
-        - train: Training parameters (lr, n_epochs)
-        - loss_fn: Loss function specification
-    """
-    config = config_module.preprocess(config)
-
-    test_intervals, train_intervals, valid_intervals = (
-        intervals.load_all_by_tiers(
-            data_dir=config["data_dir"],
-            sessions=config["sessions"],
-            experiment=config["experiment"],
-            include_trial=config["intervals"].get("include_trial", True),
-            include_homing=config["intervals"].get("include_homing", False),
-            include_sitting=config["intervals"].get("include_sitting", True),
-            balance_intervals=config["intervals"].get(
-                "balance_intervals", False
-            ),
-            sampling_rate=config["intervals"].get("sampling_rate", 20),
-        )
-    )
-
-    setup_result = setup(config, train_intervals, is_train=True)
-    model = setup_result["model"]
-    data_dict = setup_result["data_dict"]
-    loss_fns = setup_result["loss_fns"]
-    optimizer = setup_result["optimizer"]
-    scheduler = setup_result["scheduler"]
-
-    train_datasets = datasets.load_datasets(
-        data_dict,
-        train_intervals,
-        config["in_modalities"],
-        config["out_modalities"],
-        entire_trials=config["dataset"].get("entire_trials", False),
-        seq_length=config["dataset"].get("seq_length", 20),
-        stride=config["dataset"].get("stride", 20),
-        concat_input=config["dataset"].get("concat_input", True),
-        concat_output=config["dataset"].get("concat_output", True),
-    )
-
-    train_dataloaders = datasets.load_dataloaders(
-        train_datasets,
-        batch_size=config["dataset"].get("batch_size", 64),
-        shuffle=True,
-    )
-
-    valid_datasets = datasets.load_datasets(
-        data_dict,
-        valid_intervals,
-        config["in_modalities"],
-        config["out_modalities"],
-        entire_trials=config["dataset"].get("entire_trials", False),
-        seq_length=config["dataset"].get("seq_length", 20),
-        stride=config["dataset"].get("stride", 20),
-        concat_input=config["dataset"].get("concat_input", True),
-        concat_output=config["dataset"].get("concat_output", True),
-    )
-
-    valid_dataloaders = datasets.load_dataloaders(
-        valid_datasets,
-        batch_size=config["dataset"].get("batch_size", 64),
-        shuffle=False,
-    )
-
-    loop(
-        model=model,
-        train_dataloaders=train_dataloaders,
-        valid_dataloaders=valid_dataloaders,
-        loss_fns=loss_fns,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        metric=config["metric"],
-        uid=config["uid"],
-        n_epochs=config["training"].get("n_epochs", 250),
-        checkpoint_dir=config.get(
-            "checkpoint_save_dir", config["checkpoint_dir"]
-        ),
-        use_wandb=config["track"].get("wandb", False),
-        save_checkpoint=config["track"].get("checkpoint", False),
-        log_metrics=config["track"].get("logging", True),
-    )
-
-    if config.get("save", False):
-        config_module.save(config)
-
-        checkpoint_dir = config.get(
-            "checkpoint_save_dir", config["checkpoint_dir"]
-        )
-        checkpoint_path = f"{checkpoint_dir}/{config['uid']}.pt"
-        save_checkpoint(
-            model=model,
-            checkpoint_path=checkpoint_path,
-            optimizer=optimizer,
-            scheduler=scheduler,
-        )
-
-
-def evaluate(config: dict) -> tuple[dict, dict, dict]:
-    """
-    Evaluate a model using the provided configuration.
-
-    This function loads a trained model and evaluates it on test data,
-    computing specified metrics and returning ground truths and predictions.
-
-    Parameters
-    ----------
-    config : dict
-        Configuration dictionary containing:
-        - data_dir: Path to data directory
-        - sessions: List of session names to include
-        - experiment: Experiment identifier
-        - intervals: Interval configuration for data splitting
-        - model: Model architecture and parameters
-        - dataset: Dataset configuration
-        - uid: Model checkpoint identifier
-        - metric: Evaluation metric to compute
-
-    Returns
-    -------
-    tuple[dict, dict, dict]
-        Tuple containing (metrics, ground_truths, predictions) where:
-        - metrics: Dict of computed metric values
-        - ground_truths: Dict mapping sessions to ground truth arrays
-        - predictions: Dict mapping sessions to prediction arrays
-    """
-    config = config_module.preprocess(config)
-    config["track"]["wandb"] = False
-
-    test_intervals, train_intervals, valid_intervals = (
-        intervals.load_all_by_tiers(
-            data_dir=config["data_dir"],
-            sessions=config["sessions"],
-            experiment=config["experiment"],
-            include_trial=config["intervals"].get("include_trial", True),
-            include_homing=config["intervals"].get("include_homing", False),
-            include_sitting=config["intervals"].get("include_sitting", True),
-            balance_intervals=config["intervals"].get(
-                "balance_intervals", False
-            ),
-            sampling_rate=config["intervals"].get("sampling_rate", 20),
-        )
-    )
-
-    setup_result = setup(config, train_intervals, is_train=False)
-    model = setup_result["model"]
-    data_dict = setup_result["data_dict"]
-    loss_fns = setup_result["loss_fns"]
-
-    test_datasets = datasets.load_datasets(
-        data_dict,
-        test_intervals,
-        config["in_modalities"],
-        config["out_modalities"],
-        entire_trials=config["dataset"].get("entire_trials", False),
-        seq_length=config["dataset"].get("seq_length", 20),
-        stride=config["dataset"].get("stride", 20),
-        concat_input=config["dataset"].get("concat_input", True),
-        concat_output=config["dataset"].get("concat_output", True),
-    )
-
-    test_dataloaders = datasets.load_dataloaders(
-        test_datasets,
-        batch_size=config["dataset"].get("batch_size", 64),
-        shuffle=False,
-    )
-
-    if not config["dataset"].get("entire_trials", False):
-        metrics, gts, preds = iterate(
-            model,
-            test_dataloaders,
-            loss_fns,
-            optimizer=None,
-            metric=config["metric"],
-            is_train=False,
-        )
-    else:
-        metrics, gts, preds = iterate_entire_trials(
-            model,
-            test_dataloaders,
-            config["dataset"].get("seq_length", 20),
-            metric=config["metric"],
-        )
-
-    return metrics, gts, preds

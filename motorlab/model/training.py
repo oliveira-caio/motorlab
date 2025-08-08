@@ -12,9 +12,6 @@ from motorlab.model.factory import (
     compute_gradient_norm,
 )
 
-VALIDATION_FREQUENCY = 25
-GRADIENT_THRESHOLD = 0.5
-
 
 def format_metrics(metrics: dict[str, Any]) -> str:
     """
@@ -91,6 +88,7 @@ def track(
     scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
     is_validation: bool = False,
     log_metrics: bool = True,
+    gradient_threshold: float = 0.5,
 ) -> None:
     """
     Track and log metrics during training or evaluation.
@@ -123,6 +121,8 @@ def track(
         Whether these are validation metrics (adds 'val_' prefix), by default False
     best_val_loss : dict
         Dictionary to track best validation loss for checkpointing, by default None
+    gradient_threshold : float, optional
+        Gradient norm threshold for checkpoint saving, by default 0.5
     """
     prefix = "val_" if is_validation else "train_"
     metrics = {
@@ -142,7 +142,7 @@ def track(
         save_checkpoint
         and is_validation
         and metrics["val_loss"] < best_val_loss["value"]
-        and metrics["grad_norm"] < GRADIENT_THRESHOLD
+        and metrics["grad_norm"] < gradient_threshold
     ):
         checkpoint_path = f"{checkpoint_dir}/{uid}.pt"
         save_ckpt(
@@ -400,13 +400,15 @@ def loop(
     model: torch.nn.Module,
     train_dataloaders: dict,
     valid_dataloaders: dict,
-    loss_fns: dict,
     optimizer: torch.optim.Optimizer,
+    loss_fns: dict,
     metric: dict | None,
     uid: str,
     n_epochs: int,
     checkpoint_dir: str,
+    validation_config: dict,
     scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
+    early_stopping: Any | None = None,
     use_wandb: bool = False,
     save_checkpoint: bool = False,
     log_metrics: bool = True,
@@ -428,6 +430,10 @@ def loop(
         Optimizer for training
     scheduler : torch.optim.lr_scheduler.LRScheduler
         Learning rate scheduler
+    early_stopping : EarlyStopping | None, optional
+        Early stopping instance to halt training when validation stops improving, by default None
+    validation_config : dict | None, optional
+        Validation configuration with 'frequency' and 'gradient_threshold', by default None
     metric : dict | None
         Metric configuration for evaluation
     n_epochs : int
@@ -443,6 +449,9 @@ def loop(
     uid : str
         Unique identifier for saving, by default None
     """
+    validation_frequency = validation_config["frequency"]
+    gradient_threshold = validation_config["gradient_threshold"]
+
     valid_metrics, _, _ = iterate(
         model,
         valid_dataloaders,
@@ -464,6 +473,7 @@ def loop(
         scheduler=scheduler,
         is_validation=True,
         best_val_loss=best_val_loss,
+        gradient_threshold=gradient_threshold,
     )
 
     for i in range(1, n_epochs + 1):
@@ -492,9 +502,10 @@ def loop(
             optimizer=optimizer,
             scheduler=scheduler,
             best_val_loss=best_val_loss,
+            gradient_threshold=gradient_threshold,
         )
 
-        if (i % VALIDATION_FREQUENCY) == 0:
+        if (i % validation_frequency) == 0:
             valid_metrics, _, _ = iterate(
                 model,
                 valid_dataloaders,
@@ -515,7 +526,19 @@ def loop(
                 scheduler=scheduler,
                 is_validation=True,
                 best_val_loss=best_val_loss,
+                gradient_threshold=gradient_threshold,
             )
+
+            if early_stopping is not None and early_stopping.should_stop(
+                valid_metrics["loss"], valid_metrics["grad_norm"]
+            ):
+                if log_metrics:
+                    run_logger = logger.get()
+                    if run_logger.handlers:
+                        run_logger.info(
+                            f"Early stopping triggered at epoch {i}"
+                        )
+                break
 
         if np.isnan(train_metrics["loss"]):
             break
@@ -523,6 +546,6 @@ def loop(
     if save_checkpoint and not best_val_loss["saved"]:
         warnings.warn(
             "No checkpoint saved since validation loss never improved with gradient norm < "
-            f"{GRADIENT_THRESHOLD}",
+            f"{gradient_threshold}",
             UserWarning,
         )
