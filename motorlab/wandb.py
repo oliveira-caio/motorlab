@@ -22,6 +22,64 @@ def run_sweep(sweep_id: str, train_function):
     wandb.agent(sweep_id, train_function, project="motorlab")
 
 
+def check_sweep_exists(sweep_id: str) -> bool:
+    """
+    Check if a wandb sweep exists.
+
+    Parameters
+    ----------
+    sweep_id : str
+        The sweep ID to check
+
+    Returns
+    -------
+    bool
+        True if sweep exists, False otherwise
+    """
+    try:
+        api = wandb.Api()
+        api.sweep(f"motorlab/{sweep_id}")
+        return True
+    except Exception:
+        # If any error occurs (sweep not found, network issues, etc.), assume it doesn't exist
+        return False
+
+
+def handle_sweep(sweep_arg: str | None, sweep_config: dict) -> str:
+    """
+    Handle sweep creation or resumption based on argument.
+
+    Parameters
+    ----------
+    sweep_arg : str | None
+        Sweep argument: None for new random sweep, string for specific sweep ID
+    sweep_config : dict
+        Sweep configuration to use for new sweeps
+
+    Returns
+    -------
+    str
+        Sweep ID to use
+    """
+    if sweep_arg is None:
+        # No argument provided, create new sweep with random ID
+        sweep_id = start_sweep(sweep_config)
+        print(f"Created new sweep: {sweep_id}")
+        return sweep_id
+
+    # Check if provided ID exists
+    if check_sweep_exists(sweep_arg):
+        print(f"Resuming existing sweep: {sweep_arg}")
+        return sweep_arg
+    else:
+        # ID doesn't exist, create new sweep with this ID as name
+        sweep_config_with_name = sweep_config.copy()
+        sweep_config_with_name["name"] = sweep_arg
+        sweep_id = start_sweep(sweep_config_with_name)
+        print(f"Created new sweep with name '{sweep_arg}': {sweep_id}")
+        return sweep_id
+
+
 def load_sweep_config() -> dict:
     """Get configuration from wandb sweep, if running in a sweep."""
     return dict(wandb.config)

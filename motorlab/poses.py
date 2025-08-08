@@ -7,47 +7,90 @@ import numpy as np
 from motorlab import utils
 
 
-def compute_speed(poses, representation, experiment):
+def load(
+    data_dir: Path,
+    session: str,
+    experiment: str,
+    poses_config: dict,
+    train_intervals: dict | None = None,
+) -> np.ndarray:
+    """Load and preprocess poses data for a session."""
+    poses_dir = data_dir / experiment / session / "poses"
+    poses_data = utils.load_from_memmap(poses_dir)
+    new_duration = len(poses_data) - (len(poses_data) % 5)
+    poses_data = poses_data[:new_duration].reshape(-1, 5, poses_data.shape[1])
+    # it will raise a warning for the old gbyk sessions because of the nans.
+    poses_data = np.nanmean(poses_data, axis=1)
+
+    intervals = train_intervals.get(session) if train_intervals else None
+
+    pcs_to_exclude = None
+    if "pcs_to_exclude" in poses_config:
+        pcs_to_exclude = poses_config["pcs_to_exclude"][session]
+
+    return preprocess(
+        poses_data,
+        poses_config,
+        experiment,
+        intervals,
+        pcs_to_exclude,
+    )
+
+
+def load_com(
+    experiment_dir: Path | str,
+    session: str,
+) -> np.ndarray:
     """
-    Compute speed from pose data using the specified representation.
+    Load center of mass data for a session.
 
     Parameters
     ----------
-    poses : np.ndarray
-        Pose data array.
+    experiment_dir : Path or str
+        Path to the experiment directory
+    session : str
+        Session name
+
+    Returns
+    -------
+    np.ndarray
+        Center of mass coordinates
+    """
+    experiment_dir = Path(experiment_dir)
+    com_path = experiment_dir / session / "poses" / "meta" / "com.npy"
+    com = np.load(com_path).astype(np.float32)
+    new_duration = len(com) - (len(com) % 5)
+    com = com[:new_duration].reshape(-1, 5, com.shape[1])
+    # it will raise a warning for the old gbyk sessions because of the nans.
+    com = np.nanmean(com, axis=1)
+    return com
+
+
+def compute_speed(data, representation):
+    """
+    Compute speed from data using the specified representation.
+
+    Parameters
+    ----------
+    data : np.ndarray
+        Input data array (poses for kps_*, COM for com_*).
     representation : str
         Type of speed representation ('kps_vec', 'com_vec', 'kps_mag', 'com_mag').
-    experiment : str
-        Experiment name (for keypoint selection).
 
     Returns
     -------
     np.ndarray
         Speed array.
     """
-    duration, n_3d_keypoints = poses.shape
-
-    if representation == "kps_vec":
-        speed = np.zeros_like(poses)
-        speed[1:] = np.diff(poses, axis=0)
-    elif representation == "com_vec":
-        poses = poses.reshape(duration, n_3d_keypoints // 3, 3)
-        com = poses[:, utils.indices_com_keypoints(experiment)].mean(axis=1)
-        speed = np.zeros_like(com)
-        speed[1:] = np.diff(com, axis=0)
-    elif representation == "kps_mag":
+    if "vec" in representation:
+        speed = np.zeros_like(data)
+        speed[1:] = np.diff(data, axis=0)
+    elif "mag" in representation:
+        duration = data.shape[0]
         speed = np.zeros((duration, 1))
-        speed[1:] = np.linalg.norm(
-            np.diff(poses, axis=0), axis=1, keepdims=True
-        )
-    elif representation == "com_mag":
-        poses = poses.reshape(duration, n_3d_keypoints // 3, 3)
-        com = poses[:, utils.indices_com_keypoints(experiment)].mean(axis=1)
-        speed = np.zeros((com.shape[0], 1))
-        speed[1:] = np.linalg.norm(np.diff(com, axis=0), axis=1, keepdims=True)
+        speed[1:] = np.linalg.norm(np.diff(data, axis=0), axis=1, keepdims=True)
     else:
         raise ValueError(f"unknown speed representation: {representation}.")
-
     return speed
 
 
@@ -68,28 +111,6 @@ def compute_acceleration(speed):
     accel = np.zeros_like(speed)
     accel[1:] = np.diff(speed, axis=0)
     return accel
-
-
-def compute_com(poses, experiment: str):
-    """
-    Compute the center of mass (COM) for each frame.
-
-    Parameters
-    ----------
-    poses : np.ndarray
-        Pose data array.
-    experiment : str
-        Experiment name (for keypoint selection).
-
-    Returns
-    -------
-    np.ndarray
-        COM positions (N, 2).
-    """
-    duration, n_3d_keypoints = poses.shape
-    poses = poses.reshape(duration, n_3d_keypoints // 3, 3)
-    com = poses[:, utils.indices_com_keypoints(experiment), :2].mean(axis=1)
-    return com
 
 
 def change_representation(data, representation, experiment):

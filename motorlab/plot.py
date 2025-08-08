@@ -11,7 +11,7 @@ import umap
 from lipstick import GifMaker, update_fig
 from sklearn.metrics import confusion_matrix as sklearn_cm
 
-from motorlab import data, intervals, metrics, room, utils
+from motorlab import intervals, metrics, poses, room, utils
 
 JOINT_SIZE = 4
 LINE_WIDTH = 6
@@ -179,8 +179,8 @@ def room_histogram2d(gts, preds, concat=False, colorbar=True, save_path=None):
         gt = gts[session]
         pred = preds[session]
         acc = metrics.balanced_accuracy(
-            room.get_tiles(gt[:, 0], gt[:, 1]),
-            room.get_tiles(pred[:, 0], pred[:, 1]),
+            room.compute_tiles(gt[:, 0], gt[:, 1]),
+            room.compute_tiles(pred[:, 0], pred[:, 1]),
         )
 
         i, j = divmod(idx, ncols)
@@ -391,10 +391,7 @@ def com(
     axs = axs.flat
 
     for i, session in enumerate(sessions):
-        poses_dir = experiment_dir / session / "poses"
-        poses_ = data.load_from_memmap(poses_dir)
-        poses_ = poses_.reshape(-1, 21, 3)
-        com = poses_[:, utils.indices_com_keypoints("gbyk"), :2].mean(axis=1)
+        com = poses.load_com(experiment_dir, session)
 
         _intervals = intervals.load(
             data_dir=data_dir,

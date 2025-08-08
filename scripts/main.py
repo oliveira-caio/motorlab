@@ -33,7 +33,7 @@ def setup_base_parser() -> argparse.ArgumentParser:
         type=str,
         nargs="?",
         const="new",
-        help="Run wandb sweep. Pass sweep ID to resume existing sweep, or no value to start new sweep (disables stdout printing)",
+        help="Run wandb sweep. Pass sweep ID to resume existing sweep or create new one with that name. No argument creates random sweep.",
     )
 
     return parser

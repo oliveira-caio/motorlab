@@ -51,22 +51,22 @@ def load_default(experiment: str, sessions: list[str]) -> dict:
         # INPUT/OUTPUT MODALITIES
         # =================================================================
         # Can be string (single modality) or list (multiple modalities)
-        # Options: "poses", "speed", "acceleration", "spike_count", "position"
+        # Options: "poses", "speed", "acceleration", "spike_count", "location"
         # Examples:
-        #   Single: "poses" or "position"
+        #   Single: "poses" or "location"
         #   Multiple: ["poses", "spike_count"] for multi-modal input/output
         "in_modalities": "poses",
-        "out_modalities": "position",
+        "out_modalities": "location",
         # =================================================================
         # LOSS FUNCTION & METRICS
         # =================================================================
         # Can be string (single task) or dict (multi-task)
         # Options for single task: "mse", "crossentropy", "poisson"
-        # Multi-task example: "loss_fn": {"spike_count": "poisson", "position": "mse"},
+        # Multi-task example: "loss_fn": {"spike_count": "poisson", "location": "mse"},
         "loss_fn": "mse",
         # Can be string (single metric) or dict (per-modality metrics)
         # Options: "mse", "accuracy", "correlation"
-        # Multi-modal example: "metric": {"position": "correlation", "spikes": "mse"},
+        # Multi-modal example: "metric": {"location": "correlation", "spikes": "mse"},
         "metric": "mse",
         # =================================================================
         # MODEL ARCHITECTURE
@@ -80,7 +80,7 @@ def load_default(experiment: str, sessions: list[str]) -> dict:
             # READOUT CONFIGURATION (can be string or dict)
             # Options: "linear", "softplus"
             # Multi-modal example:
-            #   "readout_map": {"spike_count": "softplus", "position": "linear"},
+            #   "readout_map": {"spike_count": "softplus", "location": "linear"},
             "readout": "linear",
             # OPTIONAL MODEL PARAMETERS
             # For classification (exclude for regression)
@@ -95,11 +95,16 @@ def load_default(experiment: str, sessions: list[str]) -> dict:
         "training": {
             # Maximum number of training epochs
             "n_epochs": 500,
-            # Learning rate
-            "lr": 1e-3,
-            # Options for scheduler: "step_lr", "cosine_annealing"
-            "scheduler": "cosine_annealing",
-            "eta_min": 1e-4,
+            "optimizer": {"type": "adam", "lr": 1e-2, "weight_decay": 1e-4},
+            # "optimizer": {"type": "sgd", "lr": 1e-2, "weight_decay": 1e-4, "momentum": 0.9},
+            "scheduler": {"type": "step_lr", "step_size": 100, "gamma": 0.8},
+            # "scheduler": {"type": "cosine_annealing", "eta_min": 1e-4},
+            # "scheduler": {
+            #     "type": "reduce_on_plateau",
+            #     "factor": 0.9,
+            #     "patience": 10,
+            #     "min_lr": 1e-5,
+            # },
         },
         # =================================================================
         # DATASET CONFIGURATION
@@ -130,7 +135,7 @@ def load_default(experiment: str, sessions: list[str]) -> dict:
         # =================================================================
         # MODALITY-SPECIFIC CONFIGURATIONS
         # =================================================================
-        "position": {
+        "location": {
             # Options for representation: "com" (for regression) and "tile" (for classification)
             "representation": "com",
         },
@@ -157,9 +162,9 @@ def load_default(experiment: str, sessions: list[str]) -> dict:
         # Whether to save model and config
         "save": True,
         # Directory for saving checkpoints
-        "checkpoint_dir": "artifacts/checkpoint/poses_to_position",
+        "checkpoint_dir": "artifacts/checkpoint/poses_to_location",
         # Directory for saving configs
-        "config_dir": "artifacts/config/poses_to_position",
+        "config_dir": "artifacts/config/poses_to_location",
         # LOADING CONFIGURATIONS (for transfer learning or evaluation)
         # Unique identifier for loading specific model
         # "uid": "timestamp",

@@ -1,6 +1,5 @@
 from . import (
     config,
-    data,
     datasets,
     gbyk_export,
     intervals,
@@ -18,7 +17,6 @@ from . import (
 
 __all__ = [
     "config",
-    "data",
     "datasets",
     "gbyk_export",
     "intervals",

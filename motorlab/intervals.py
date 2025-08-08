@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from motorlab import data
+from motorlab import room
 
 
 MIDDLE_RANGE = (3, 11)
@@ -130,14 +130,14 @@ def load(
         Dictionary mapping session names to lists of LabeledInterval objects.
     """
     data_dir = Path(data_dir)
+    experiment_dir = data_dir / experiment
     period = 1000 // sampling_rate
 
     intervals_dir = data_dir / experiment / session / "intervals"
     intervals = []
-    tiles = data.load_tiles(
-        data_dir,
+    tiles = room.load_location(
+        experiment_dir,
         session,
-        experiment,
         representation="tiles",
     )
 
@@ -291,7 +291,7 @@ def load_all(
     period = 1000 // sampling_rate
 
     for session in sessions:
-        tiles = data.load_tiles(data_dir, session, experiment, "tiles")
+        tiles = room.load_location(data_dir / experiment, session, "tiles")
         intervals_dir = data_dir / experiment / session / "intervals"
 
         for interval_file in sorted(intervals_dir.iterdir()):

@@ -22,15 +22,10 @@ def compute_gradient_norm(model: torch.nn.Module) -> float:
     float
         L2 norm of all gradients
     """
-    total_norm = torch.sqrt(
-        torch.tensor(
-            sum(
-                p.grad.norm().item() ** 2
-                for p in model.parameters()
-                if p.grad is not None
-            )
-        )
-    ).item()
+    gradients = torch.cat(
+        [p.grad.flatten() for p in model.parameters() if p.grad is not None]
+    )
+    total_norm = torch.linalg.norm(gradients, ord=2).item()
     return total_norm
 
 

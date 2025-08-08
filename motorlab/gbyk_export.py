@@ -437,6 +437,7 @@ def poses(session_dir: Path | str, old_format: bool = False) -> None:
             old_format,
         )
         com = np.stack([x_com, y_com, z_com], axis=0).T
+        com = com.astype(np.float32)
         np.save(f, com)
 
     ### coords

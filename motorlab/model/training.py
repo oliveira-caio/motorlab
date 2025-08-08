@@ -34,6 +34,7 @@ def format_metrics(metrics: dict[str, Any]) -> str:
     epoch_str = None
     loss_str = None
     grad_str = None
+    lr_str = None
     other_metrics = []
 
     for key, value in metrics.items():
@@ -59,6 +60,8 @@ def format_metrics(metrics: dict[str, Any]) -> str:
                 if "val" in key
                 else f"{key}: {value:.2f}"
             )
+        elif "lr" in key:
+            lr_str = f"lr: {value:.5f}"
         else:
             other_metrics.append(
                 f"  {key}: {value:.4f}"
@@ -69,7 +72,9 @@ def format_metrics(metrics: dict[str, Any]) -> str:
     formatted.append(epoch_str)
     formatted.extend(other_metrics)
     formatted.append(loss_str)
-    if grad_str:
+    if lr_str is not None:
+        formatted.append(lr_str)
+    if grad_str is not None:
         formatted.append(grad_str)
     return " | ".join(formatted)
 
@@ -397,11 +402,11 @@ def loop(
     valid_dataloaders: dict,
     loss_fns: dict,
     optimizer: torch.optim.Optimizer,
-    scheduler: torch.optim.lr_scheduler.LRScheduler,
     metric: dict | None,
     uid: str,
     n_epochs: int,
     checkpoint_dir: str,
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None,
     use_wandb: bool = False,
     save_checkpoint: bool = False,
     log_metrics: bool = True,
@@ -470,7 +475,11 @@ def loop(
             metric,
             is_train=True,
         )
-        scheduler.step()
+        if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            scheduler.step(train_metrics["loss"])
+        elif scheduler is not None:
+            scheduler.step()
+            train_metrics["lr"] = scheduler.get_last_lr()[0]
         train_metrics["epoch"] = i
         track(
             metrics=train_metrics,

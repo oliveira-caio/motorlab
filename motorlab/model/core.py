@@ -1,12 +1,12 @@
 import datetime
 import pprint
+import warnings
 
 import torch
 import wandb
 
 from motorlab import (
     config as config_module,
-    data,
     datasets,
     intervals,
     logger,
@@ -21,6 +21,89 @@ from motorlab.model.factory import (
     save_checkpoint,
     load_checkpoint_metadata,
 )
+
+
+def create_optimizer(model, optimizer_config: dict) -> torch.optim.Optimizer:
+    """
+    Create an optimizer based on configuration.
+
+    Parameters
+    ----------
+    optimizer_config : dict
+        Optimizer configuration with 'type' and optimizer-specific parameters
+
+    Returns
+    -------
+    torch.optim.Optimizer
+        Configured optimizer instance
+    """
+    optimizer_type = optimizer_config["type"]
+
+    if optimizer_type == "adam":
+        return torch.optim.Adam(
+            params=model.parameters(),
+            lr=optimizer_config.get("lr", 1e-2),
+            weight_decay=optimizer_config.get("weight_decay", 0),
+        )
+    elif optimizer_type == "sgd":
+        return torch.optim.SGD(
+            params=model.parameters(),
+            lr=optimizer_config.get("lr", 1e-2),
+            weight_decay=optimizer_config.get("weight_decay", 0.0),
+            momentum=optimizer_config.get("momentum", 0.0),
+        )
+    else:
+        raise ValueError(f"Unsupported optimizer type: {optimizer_type}")
+
+
+def create_scheduler(
+    optimizer: torch.optim.Optimizer, scheduler_config: dict
+) -> torch.optim.lr_scheduler.LRScheduler | None:
+    """
+    Create a learning rate scheduler based on configuration.
+
+    Parameters
+    ----------
+    optimizer : torch.optim.Optimizer
+        The optimizer to attach the scheduler to
+    scheduler_config : dict
+        Scheduler configuration with 'type' and scheduler-specific parameters
+
+    Returns
+    -------
+    torch.optim.lr_scheduler.LRScheduler
+        Configured scheduler instance
+
+    Raises
+    ------
+    ValueError
+        If scheduler type is not recognized
+    """
+    scheduler_type = scheduler_config["type"]
+
+    if scheduler_type == "step_lr":
+        return torch.optim.lr_scheduler.StepLR(
+            optimizer,
+            step_size=scheduler_config.get("step_size", 25),
+            gamma=scheduler_config.get("gamma", 0.4),
+        )
+    elif scheduler_type == "cosine_annealing":
+        return torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=scheduler_config.get("T_max", 100),
+            eta_min=scheduler_config.get("eta_min", 1e-4),
+        )
+    elif scheduler_type == "reduce_on_plateau":
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=scheduler_config.get("factor", 0.1),
+            patience=scheduler_config.get("patience", 10),
+            min_lr=scheduler_config.get("min_lr", 1e-5),
+        )
+    else:
+        warnings.warn("It will use a constant learning rate.")
+        return None
 
 
 def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
@@ -43,14 +126,14 @@ def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
     """
     utils.fix_seed(config.get("seed", 0))
 
-    data_dict = data.load_all(
+    data_dict = utils.load_all_data(
         data_dir=config["data_dir"],
         sessions=config["sessions"],
         in_modalities=config["in_modalities"],
         out_modalities=config["out_modalities"],
         experiment=config.get("experiment", "gbyk"),
         poses_config=config.get("poses", dict()),
-        position_config=config.get("position", dict()),
+        location_config=config.get("position", dict()),
         kinematics_config=config.get("kinematics", dict()),
         spikes_config=config.get("spikes", dict()),
         train_intervals=train_intervals,
@@ -128,30 +211,15 @@ def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
     }
 
     if is_train:
-        optimizer = torch.optim.Adam(
-            model.parameters(), lr=config["training"].get("lr", 5e-3)
-        )
-
-        schedulers = {
-            "step_lr": torch.optim.lr_scheduler.StepLR(
-                optimizer,
-                step_size=config["training"].get("step_size", 25),
-                gamma=config["training"].get("gamma", 0.4),
-            ),
-            "cosine_annealing": torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer,
-                T_max=config["training"].get("T_max", 100),
-                eta_min=config["training"].get("eta_min", 1e-4),
-            ),
-        }
-        scheduler = schedulers[config["training"].get("scheduler", "step_lr")]
+        optimizer = create_optimizer(model, config["training"]["optimizer"])
+        scheduler = create_scheduler(optimizer, config["training"]["scheduler"])
 
         if checkpoint_data is not None:
             if "optimizer_state_dict" in checkpoint_data:
                 optimizer.load_state_dict(
                     checkpoint_data["optimizer_state_dict"]
                 )
-            if "scheduler_state_dict" in checkpoint_data:
+            if scheduler and "scheduler_state_dict" in checkpoint_data:
                 scheduler.load_state_dict(
                     checkpoint_data["scheduler_state_dict"]
                 )

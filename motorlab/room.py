@@ -1,7 +1,11 @@
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 
 from matplotlib.patches import Rectangle
+
+from motorlab import poses
 
 
 # room size
@@ -13,22 +17,69 @@ x_divisions = 3
 y_divisions = 5
 
 
-def get_tiles(xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+def load_location(
+    experiment_dir: Path | str,
+    session: str,
+    representation: str = "com",
+) -> np.ndarray:
     """
-    Compute the tile number for given x and y coordinates in the room.
+    Load location data for a session.
 
     Parameters
     ----------
-    xs : array-like or float
+    experiment_dir : Path or str
+        Path to the experiment directory
+    session : str
+        Session name
+    representation : str, optional
+        Location representation ('com' or 'tiles'). Default is 'com'.
+
+    Returns
+    -------
+    np.ndarray
+        Location data as COM coordinates or tile numbers
+    """
+    experiment_dir = Path(experiment_dir)
+    com_data = poses.load_com(experiment_dir, session)
+
+    if representation == "com":
+        return com_data
+    elif representation == "tiles":
+        # com_data[:, 0] and com_data[:, 1] are arrays, so compute_tiles returns array
+        return compute_tiles(com_data[:, 0], com_data[:, 1])  # type: ignore[return-value]
+    else:
+        raise ValueError(
+            f"Unknown representation: {representation}. Use 'com' or 'tiles'."
+        )
+
+
+def compute_tiles(xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+    """
+    Compute the tile number for given x and y coordinates in the room.
+
+    It works with single floats, but for type checking purposes, we explicitly
+    use np.ndarray.
+
+    Parameters
+    ----------
+    xs : float or np.ndarray
         X coordinates (meters).
-    ys : array-like or float
+    ys : float or np.ndarray
         Y coordinates (meters).
 
     Returns
     -------
-    tile_number : array-like or int
+    float or np.ndarray
         Tile number(s) corresponding to the input coordinates.
+        Returns float for scalar inputs, np.ndarray for array inputs.
     """
+    if isinstance(xs, np.ndarray) and isinstance(ys, np.ndarray):
+        assert len(xs) == len(ys), "xs and ys arrays must have the same length"
+    else:
+        raise ValueError(
+            "Both xs and ys must be the same type (both float or both array)"
+        )
+
     tile_width = x_size / x_divisions
     tile_height = y_size / y_divisions
 
@@ -41,6 +92,7 @@ def get_tiles(xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
 
     # Tiles are numbered left-to-right, bottom-to-top.
     tile_number = row * x_divisions + col
+
     return tile_number
 
 
