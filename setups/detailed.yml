@@ -1,0 +1,23 @@
+training:
+  max_epochs: 1000
+  optimizer:
+    lr: 1e-2
+    weight_decay: 1e-4
+  scheduler:
+    type: step_lr
+    step_size: 200
+    gamma: 0.8
+  early_stopping:
+    enabled: true
+    patience: 50
+
+model:
+  hidden_dim: 512
+  n_layers: 4
+  embedding_dim: 256
+
+tracking:
+  stdout: true
+  wandb: true
+  checkpoints: true
+  logging: true

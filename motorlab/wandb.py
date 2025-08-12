@@ -5,7 +5,7 @@ import copy
 import wandb
 
 
-def init_wandb(name: str | None = None):
+def init(name: str | None = None):
     wandb.init(
         project="motorlab",
         name=name,

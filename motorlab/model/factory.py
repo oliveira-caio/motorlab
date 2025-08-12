@@ -6,7 +6,10 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from torch.nn.parallel import DistributedDataParallel as DDP
+
 from motorlab import modules, utils
+from motorlab.model import distributed
 
 
 MODEL_REGISTRY = {
@@ -40,6 +43,84 @@ def get_available_architectures() -> list[str]:
         List of registered architecture names
     """
     return list(MODEL_REGISTRY.keys())
+
+
+def compile_model(model: torch.nn.Module) -> torch.nn.Module:
+    """
+    Attempt to compile the model using torch.compile.
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Model to compile
+
+    Returns
+    -------
+    torch.nn.Module
+        Compiled model if successful, original model if compilation fails
+    """
+    if utils.DEVICE.type == "cuda":
+        compiled_model = torch.compile(model, mode="max-autotune")
+        return compiled_model
+    else:
+        return model
+
+
+def prepare_model_for_distributed(model: torch.nn.Module) -> torch.nn.Module:
+    """
+    Prepare a model for distributed training if multiple GPUs are available.
+
+    This function:
+    1. Sets up distributed training if needed
+    2. Compiles the model
+    3. Wraps with DistributedDataParallel if appropriate
+
+    Parameters
+    ----------
+    model : torch.nn.Module
+        Model to prepare for distributed training
+
+    Returns
+    -------
+    torch.nn.Module
+        Model ready for distributed training (wrapped in DDP if needed)
+    """
+    if distributed.is_available() and not distributed.is_initialized():
+        if "RANK" in os.environ:
+            distributed.setup_distributed()
+        else:
+            # Single machine, multiple GPUs available but not launched with torchrun
+            if distributed.is_main_process():
+                from motorlab import logger
+
+                run_logger = logger.get()
+                if run_logger.handlers:
+                    run_logger.info(
+                        f"Multiple GPUs detected ({torch.cuda.device_count()})"
+                    )
+                    run_logger.info(
+                        "For multi-GPU training, launch with: torchrun --nproc_per_node={} script.py".format(
+                            torch.cuda.device_count()
+                        )
+                    )
+
+    # Compile the model first (before DDP wrapping)
+    model = compile_model(model)
+
+    # Wrap with DDP if distributed training is active
+    if distributed.is_initialized():
+        model = DDP(model, device_ids=[torch.cuda.current_device()])
+
+        if distributed.is_main_process():
+            from motorlab import logger
+
+            run_logger = logger.get()
+            if run_logger.handlers:
+                run_logger.info(
+                    f"Model wrapped with DistributedDataParallel on {distributed.get_world_size()} GPUs"
+                )
+
+    return model
 
 
 def compute_gradient_norm(model: torch.nn.Module) -> float:
@@ -101,7 +182,7 @@ def create(
 ) -> torch.nn.Module:
     """
     Create a model based on the specified architecture and parameters.
-    
+
     Uses automatic parameter inspection to filter model_dict to only include
     parameters that the target model class actually accepts.
 
@@ -126,19 +207,22 @@ def create(
     """
     if architecture not in MODEL_REGISTRY:
         available = ", ".join(get_available_architectures())
-        raise ValueError(f"Unknown architecture: '{architecture}'. Available: {available}")
-    
+        raise ValueError(
+            f"Unknown architecture: '{architecture}'. Available: {available}"
+        )
+
     model_class = MODEL_REGISTRY[architecture]
-    
+
     # Get valid parameters from the class constructor
     sig = inspect.signature(model_class.__init__)
     valid_params = set(sig.parameters.keys()) - {"self"}
-    
+
     # Filter model_dict to only include valid parameters
     kwargs = {k: v for k, v in model_dict.items() if k in valid_params}
-    
+
     model = model_class(sessions=sessions, **kwargs)
     model.to(utils.DEVICE)
+    model = prepare_model_for_distributed(model)
     return model
 
 

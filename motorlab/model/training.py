@@ -1,16 +1,52 @@
 import warnings
 
+from contextlib import nullcontext
 from typing import Any
 
 import numpy as np
 import torch
 import wandb
 
+from torch.cuda.amp import GradScaler
+
 from motorlab import logger, metrics, utils
+from motorlab.model import distributed
 from motorlab.model.factory import (
     save_checkpoint as save_ckpt,
     compute_gradient_norm,
 )
+
+
+def get_mixed_precision_context():
+    """
+    Get the appropriate mixed precision context and scaler based on device.
+
+    Returns
+    -------
+    tuple
+        (autocast_context, scaler, use_scaler)
+        - autocast_context: Context manager for automatic mixed precision
+        - scaler: GradScaler for CUDA or None for MPS/CPU
+        - use_scaler: Boolean indicating whether to use gradient scaling
+    """
+    if utils.DEVICE.type == "cuda":
+        # CUDA supports full AMP with GradScaler
+        # For distributed training, each process gets its own scaler
+        return (
+            torch.autocast(device_type="cuda", dtype=torch.float16),
+            GradScaler(),
+            True,
+        )
+    elif utils.DEVICE.type == "mps":
+        # MPS supports autocast but not GradScaler
+        return (
+            torch.autocast(device_type="cpu", dtype=torch.float16),
+            None,
+            False,
+        )
+    else:
+        # CPU fallback - no mixed precision
+        return nullcontext(), None, False
 
 
 def format_metrics(metrics: dict[str, Any]) -> str:
@@ -143,10 +179,13 @@ def track(
         and is_validation
         and metrics["val_loss"] < best_val_loss["value"]
         and metrics["grad_norm"] < gradient_threshold
+        and distributed.is_main_process()  # Only save from rank 0
     ):
         checkpoint_path = f"{checkpoint_dir}/{uid}.pt"
+        # Unwrap DDP model if needed
+        model_to_save = model.module if hasattr(model, "module") else model
         save_ckpt(
-            model=model,
+            model=model_to_save,
             checkpoint_path=checkpoint_path,
             epoch=metrics["epoch"],
             optimizer=optimizer,
@@ -159,7 +198,6 @@ def track(
 def iterate_entire_trials(
     model: torch.nn.Module,
     dataloaders: dict,
-    seq_length: int,
     metric: dict | None = None,
 ) -> tuple[dict, dict, dict]:
     """
@@ -174,8 +212,6 @@ def iterate_entire_trials(
         Model to evaluate
     dataloaders : dict
         Dictionary mapping session names to DataLoader objects containing entire trials
-    seq_length : int
-        Fixed sequence length for splitting variable-length trials
     metric : dict | None, optional
         Metric dictionary to compute on predictions, by default None
 
@@ -188,8 +224,10 @@ def iterate_entire_trials(
         - preds: Dict mapping sessions to the dictionary of modalities. Each modality dictionary maps the modality to the list of prediction arrays per trial.
     """
     model.eval()
+    seq_len = 80
     gts = {session: {} for session in dataloaders}
     preds = {session: {} for session in dataloaders}
+    autocast_context, _, _ = get_mixed_precision_context()
 
     with torch.no_grad():
         for session in dataloaders:
@@ -204,12 +242,14 @@ def iterate_entire_trials(
                     for modality_name, modality_tensor in x_trial.items()
                     for seq in torch.tensor_split(
                         modality_tensor,
-                        modality_tensor.shape[1] // seq_length,
+                        modality_tensor.shape[1] // seq_len,
                         dim=1,
                     )
                 ]
 
-                seq_preds = [model(seq, session) for seq in x_seqs]
+                with autocast_context:
+                    seq_preds = [model(seq, session) for seq in x_seqs]
+
                 trial_pred = {
                     modality_name: torch.cat(
                         [pred[modality_name] for pred in seq_preds], dim=1
@@ -317,6 +357,7 @@ def iterate(
     preds = {session: {} for session in dataloaders}
     track_metrics = dict()
     losses = []
+    autocast_context, scaler, use_scaler = get_mixed_precision_context()
 
     session_iterators = {
         session: iter(dataloader) for session, dataloader in dataloaders.items()
@@ -332,7 +373,8 @@ def iterate(
                 x_trial, y_trial = next(session_iterators[session])
                 x_trial = {k: v.to(utils.DEVICE) for k, v in x_trial.items()}
                 y_trial = {k: v.to(utils.DEVICE) for k, v in y_trial.items()}
-                pred = model(x_trial, session)
+                with autocast_context:
+                    pred = model(x_trial, session)
 
                 for modality in y_trial.keys():
                     if modality not in gts[session]:
@@ -341,15 +383,28 @@ def iterate(
                     gts[session][modality].append(y_trial[modality])
                     preds[session][modality].append(pred[modality])
 
-                loss = loss_fns[session](pred, y_trial)
-                loss.backward()
+                with autocast_context:
+                    loss = loss_fns[session](pred, y_trial)
+
+                if is_train and optimizer is not None:
+                    if use_scaler and scaler is not None:
+                        scaler.scale(loss).backward()
+                    else:
+                        loss.backward()
+                else:
+                    loss.backward()
+
                 total_loss += loss.item()
 
             except StopIteration:
                 sessions_to_remove.append(session)
 
         if is_train and optimizer is not None:
-            optimizer.step()
+            if use_scaler and scaler is not None:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
             optimizer.zero_grad()
 
         avg_loss = total_loss / len(active_sessions)

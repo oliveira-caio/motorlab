@@ -11,52 +11,6 @@ from motorlab.model.training import loop, iterate, iterate_entire_trials
 from motorlab.model.factory import save_checkpoint
 
 
-def prepare_data_pipeline(
-    config: dict, data_dict: dict, intervals_dict: dict, shuffle: bool = True
-) -> tuple[dict, dict]:
-    """
-    Prepare datasets and dataloaders from configuration and intervals.
-
-    This function handles the common data preparation logic shared between
-    training and evaluation workflows.
-
-    Parameters
-    ----------
-    config : dict
-        Configuration dictionary containing dataset parameters
-    data_dict : dict
-        Dictionary containing loaded data for all sessions
-    intervals_dict : dict
-        Dictionary mapping session names to interval lists
-    shuffle : bool, optional
-        Whether to shuffle the data, by default True
-
-    Returns
-    -------
-    tuple[dict, dict]
-        Tuple of (datasets, dataloaders) dictionaries
-    """
-    datasets_dict = datasets.load_datasets(
-        data_dict=data_dict,
-        intervals=intervals_dict,
-        in_modalities=config["in_modalities"],
-        out_modalities=config["out_modalities"],
-        entire_trials=config["dataset"].get("entire_trials", False),
-        seq_length=config["dataset"].get("seq_length", 20),
-        stride=config["dataset"].get("stride", 20),
-        concat_input=config["dataset"].get("concat_input", True),
-        concat_output=config["dataset"].get("concat_output", True),
-    )
-
-    dataloaders_dict = datasets.load_dataloaders(
-        datasets_dict,
-        batch_size=config["dataset"].get("batch_size", 64),
-        shuffle=shuffle,
-    )
-
-    return datasets_dict, dataloaders_dict
-
-
 def train(config: dict) -> None:
     """
     Train a model using the provided configuration.
@@ -68,30 +22,26 @@ def train(config: dict) -> None:
     ----------
     config : dict
         Configuration dictionary containing:
-        - data_dir: Path to data directory
+        - paths: Path configuration (data_dir, artifacts_dir)
         - sessions: List of session names to include
         - experiment: Experiment identifier
-        - intervals: Interval configuration for data splitting
+        - modalities: Modality configurations including intervals
         - model: Model architecture and parameters
-        - dataset: Dataset configuration (batch_size, seq_length, etc.)
-        - training: Training parameters (lr, n_epochs, etc.)
-        - loss_fn: Loss function specification
+        - data: Data configuration (modalities, dataset, dataloader)
+        - training: Training parameters (max_epochs, optimizer, etc.)
+        - tracking: Logging and checkpoint configuration
     """
     config = config_module.preprocess(config)
 
-    test_intervals, train_intervals, valid_intervals = (
-        intervals.load_all_by_tiers(
-            data_dir=config["data_dir"],
-            sessions=config["sessions"],
-            experiment=config["experiment"],
-            include_trial=config["intervals"].get("include_trial", True),
-            include_homing=config["intervals"].get("include_homing", False),
-            include_sitting=config["intervals"].get("include_sitting", True),
-            balance_intervals=config["intervals"].get(
-                "balance_intervals", False
-            ),
-            sampling_rate=config["intervals"].get("sampling_rate", 20),
-        )
+    intervals_config = config["modalities"]["intervals"]
+    _, train_intervals, valid_intervals = intervals.load_all_by_tiers(
+        data_dir=config["paths"]["data_dir"],
+        sessions=config["sessions"],
+        experiment=config["experiment"],
+        include_trial=intervals_config.get("include_trial", True),
+        include_homing=intervals_config.get("include_homing", False),
+        include_sitting=intervals_config.get("include_sitting", True),
+        balance_intervals=intervals_config.get("balance_intervals", False),
     )
 
     setup_result = setup(config, train_intervals, is_train=True)
@@ -102,12 +52,44 @@ def train(config: dict) -> None:
     scheduler = setup_result["scheduler"]
     early_stopping = setup_result["early_stopping"]
 
-    train_datasets, train_dataloaders = prepare_data_pipeline(
-        config, data_dict, train_intervals, shuffle=True
+    train_datasets = datasets.load_datasets(
+        data_dict=data_dict,
+        intervals=train_intervals,
+        input_modalities=config["data"]["input_modalities"],
+        output_modalities=config["data"]["output_modalities"],
+        stride=config["data"]["dataset"]["stride"],
+        concat_input=config["data"]["dataset"]["concat_input"],
+        concat_output=config["data"]["dataset"]["concat_output"],
     )
 
-    valid_datasets, valid_dataloaders = prepare_data_pipeline(
-        config, data_dict, valid_intervals, shuffle=False
+    train_dataloaders = datasets.load_dataloaders(
+        datasets=train_datasets,
+        min_length=config["data"]["dataloader"]["min_length"],
+        max_length=config["data"]["dataloader"]["max_length"],
+        variable_length=config["data"]["dataloader"]["variable_length"],
+        batch_size=config["data"]["dataloader"]["batch_size"],
+        shuffle=True,
+        test_mode=False,
+    )
+
+    valid_datasets = datasets.load_datasets(
+        data_dict=data_dict,
+        intervals=valid_intervals,
+        input_modalities=config["data"]["input_modalities"],
+        output_modalities=config["data"]["output_modalities"],
+        stride=config["data"]["dataset"]["stride"],
+        concat_input=config["data"]["dataset"]["concat_input"],
+        concat_output=config["data"]["dataset"]["concat_output"],
+    )
+
+    valid_dataloaders = datasets.load_dataloaders(
+        datasets=valid_datasets,
+        min_length=config["data"]["dataloader"]["max_length"],
+        max_length=config["data"]["dataloader"]["max_length"],  # fixed length
+        variable_length=config["data"]["dataloader"]["variable_length"],
+        batch_size=config["data"]["dataloader"]["batch_size"],
+        shuffle=False,
+        test_mode=False,
     )
 
     loop(
@@ -116,25 +98,25 @@ def train(config: dict) -> None:
         valid_dataloaders=valid_dataloaders,
         optimizer=optimizer,
         loss_fns=loss_fns,
-        metric=config["metric"],
+        metric=config["training"]["metric"],
         uid=config["uid"],
-        n_epochs=config["training"].get("n_epochs", 250),
-        checkpoint_dir=config.get(
-            "checkpoint_save_dir", config["checkpoint_dir"]
+        n_epochs=config["training"]["max_epochs"],
+        checkpoint_dir=config["paths"].get(
+            "checkpoint_save_dir", config["paths"]["checkpoint_dir"]
         ),
         validation_config=config["training"]["validation"],
         scheduler=scheduler,
         early_stopping=early_stopping,
-        use_wandb=config["track"].get("wandb", False),
-        save_checkpoint=config["track"].get("checkpoint", False),
-        log_metrics=config["track"].get("logging", True),
+        use_wandb=config["tracking"].get("wandb", False),
+        save_checkpoint=config["tracking"].get("checkpoint", False),
+        log_metrics=config["tracking"].get("logging", True),
     )
 
     if config.get("save", False):
         config_module.save(config)
 
-        checkpoint_dir = config.get(
-            "checkpoint_save_dir", config["checkpoint_dir"]
+        checkpoint_dir = config["paths"].get(
+            "checkpoint_save_dir", config["paths"]["checkpoint_dir"]
         )
         checkpoint_path = f"{checkpoint_dir}/{config['uid']}.pt"
         save_checkpoint(
@@ -145,7 +127,7 @@ def train(config: dict) -> None:
         )
 
 
-def evaluate(config: dict) -> tuple[dict, dict, dict]:
+def evaluate(config: dict, test_mode: bool) -> tuple[dict, dict, dict]:
     """
     Evaluate a model using the provided configuration.
 
@@ -156,14 +138,16 @@ def evaluate(config: dict) -> tuple[dict, dict, dict]:
     ----------
     config : dict
         Configuration dictionary containing:
-        - data_dir: Path to data directory
+        - paths: Path configuration (data_dir, artifacts_dir)
         - sessions: List of session names to include
         - experiment: Experiment identifier
-        - intervals: Interval configuration for data splitting
+        - modalities: Modality configurations including intervals
         - model: Model architecture and parameters
-        - dataset: Dataset configuration
+        - data: Data configuration (modalities, dataset, dataloader)
+        - training: Training parameters and metric specification
         - uid: Model checkpoint identifier
-        - metric: Evaluation metric to compute
+    test_mode : bool
+        Whether to use test mode (entire trials, batch_size=1)
 
     Returns
     -------
@@ -174,21 +158,17 @@ def evaluate(config: dict) -> tuple[dict, dict, dict]:
         - predictions: Dict mapping sessions to prediction arrays
     """
     config = config_module.preprocess(config)
-    config["track"]["wandb"] = False  # Disable wandb for evaluation
+    config["tracking"]["wandb"] = False  # Disable wandb for evaluation
 
-    test_intervals, train_intervals, valid_intervals = (
-        intervals.load_all_by_tiers(
-            data_dir=config["data_dir"],
-            sessions=config["sessions"],
-            experiment=config["experiment"],
-            include_trial=config["intervals"].get("include_trial", True),
-            include_homing=config["intervals"].get("include_homing", False),
-            include_sitting=config["intervals"].get("include_sitting", True),
-            balance_intervals=config["intervals"].get(
-                "balance_intervals", False
-            ),
-            sampling_rate=config["intervals"].get("sampling_rate", 20),
-        )
+    intervals_config = config["modalities"]["intervals"]
+    test_intervals, train_intervals, _ = intervals.load_all_by_tiers(
+        data_dir=config["paths"]["data_dir"],
+        sessions=config["sessions"],
+        experiment=config["experiment"],
+        include_trial=intervals_config.get("include_trial", True),
+        include_homing=intervals_config.get("include_homing", False),
+        include_sitting=intervals_config.get("include_sitting", True),
+        balance_intervals=intervals_config.get("balance_intervals", False),
     )
 
     setup_result = setup(config, train_intervals, is_train=False)
@@ -196,25 +176,40 @@ def evaluate(config: dict) -> tuple[dict, dict, dict]:
     data_dict = setup_result["data_dict"]
     loss_fns = setup_result["loss_fns"]
 
-    test_datasets, test_dataloaders = prepare_data_pipeline(
-        config, data_dict, test_intervals, shuffle=False
+    test_datasets = datasets.load_datasets(
+        data_dict=data_dict,
+        intervals=test_intervals,
+        input_modalities=config["data"]["input_modalities"],
+        output_modalities=config["data"]["output_modalities"],
+        stride=config["data"]["dataset"]["stride"],
+        concat_input=config["data"]["dataset"]["concat_input"],
+        concat_output=config["data"]["dataset"]["concat_output"],
     )
 
-    if not config["dataset"].get("entire_trials", False):
+    test_dataloaders = datasets.load_dataloaders(
+        datasets=test_datasets,
+        min_length=config["data"]["dataloader"]["max_length"],
+        max_length=config["data"]["dataloader"]["max_length"],  # fixed length
+        variable_length=config["data"]["dataloader"]["variable_length"],
+        batch_size=config["data"]["dataloader"]["batch_size"],
+        shuffle=False,
+        test_mode=test_mode,
+    )
+
+    if test_mode:
+        metrics, gts, preds = iterate_entire_trials(
+            model,
+            test_dataloaders,
+            metric=config["training"]["metric"],
+        )
+    else:
         metrics, gts, preds = iterate(
             model,
             test_dataloaders,
             loss_fns,
             optimizer=None,
-            metric=config["metric"],
+            metric=config["training"]["metric"],
             is_train=False,
-        )
-    else:
-        metrics, gts, preds = iterate_entire_trials(
-            model,
-            test_dataloaders,
-            config["dataset"].get("seq_length", 20),
-            metric=config["metric"],
         )
 
     return metrics, gts, preds

@@ -7,6 +7,8 @@ import yaml
 from motorlab import room
 
 
+MODALITY_SAMPLING_RATE = 1000
+RUN_SAMPLING_RATE = 20
 MIDDLE_RANGE = (3, 11)
 
 
@@ -100,7 +102,6 @@ def load(
     include_homing: bool = True,
     include_sitting: bool = True,
     balance_intervals: bool = False,
-    sampling_rate: int = 20,
 ) -> list[LabeledInterval]:
     """
     Load intervals for a single session.
@@ -121,8 +122,6 @@ def load(
         Whether to include sitting intervals. Default is True.
     balance_intervals : bool, optional
         Whether to balance intervals. Default is False.
-    sampling_rate : int, optional
-        Sampling rate in Hz. Default is 20.
 
     Returns
     -------
@@ -131,7 +130,7 @@ def load(
     """
     data_dir = Path(data_dir)
     experiment_dir = data_dir / experiment
-    period = 1000 // sampling_rate
+    period = MODALITY_SAMPLING_RATE // RUN_SAMPLING_RATE
 
     intervals_dir = data_dir / experiment / session / "intervals"
     intervals = []
@@ -181,7 +180,6 @@ def load_by_tiers(
     include_homing: bool = True,
     include_sitting: bool = True,
     balance_intervals: bool = False,
-    sampling_rate: int = 20,
 ) -> tuple[list[LabeledInterval], list[LabeledInterval], list[LabeledInterval]]:
     """
     Load intervals for a single session and split by tiers (test, train, validation).
@@ -202,8 +200,6 @@ def load_by_tiers(
         Whether to include sitting intervals. Default is True.
     balance_intervals : bool, optional
         Whether to balance intervals. Default is False.
-    sampling_rate : int, optional
-        Sampling rate in Hz. Default is 20.
 
     Returns
     -------
@@ -218,7 +214,6 @@ def load_by_tiers(
         include_homing=include_homing,
         include_sitting=include_sitting,
         balance_intervals=balance_intervals,
-        sampling_rate=sampling_rate,
     )
 
     test_intervals = [
@@ -242,7 +237,6 @@ def load_all_by_tiers(
     include_homing: bool = True,
     include_sitting: bool = True,
     balance_intervals: bool = False,
-    sampling_rate: int = 20,
 ) -> tuple[
     dict[str, list[LabeledInterval]],
     dict[str, list[LabeledInterval]],
@@ -267,8 +261,6 @@ def load_all_by_tiers(
         Whether to include sitting intervals. Default is True.
     balance_intervals : bool, optional
         Whether to balance intervals. Default is False.
-    sampling_rate : int, optional
-        Sampling rate in Hz. Default is 20.
 
     Returns
     -------
@@ -288,7 +280,6 @@ def load_all_by_tiers(
             include_homing=include_homing,
             include_sitting=include_sitting,
             balance_intervals=balance_intervals,
-            sampling_rate=sampling_rate,
         )
         test_intervals[session] = test
         train_intervals[session] = train
@@ -305,7 +296,6 @@ def load_all(
     include_homing: bool = True,
     include_sitting: bool = True,
     balance_intervals: bool = False,
-    sampling_rate: int = 20,
 ) -> dict[str, list[LabeledInterval]]:
     """
     Load all intervals for each session with optional filtering and processing.
@@ -326,8 +316,6 @@ def load_all(
         Whether to include sitting intervals. Default is True.
     balance_intervals : bool, optional
         Whether to balance intervals. Default is False.
-    sampling_rate : int, optional
-        Sampling rate in Hz. Default is 20.
 
     Returns
     -------
@@ -345,7 +333,6 @@ def load_all(
             include_homing=include_homing,
             include_sitting=include_sitting,
             balance_intervals=balance_intervals,
-            sampling_rate=sampling_rate,
         )
 
     return intervals

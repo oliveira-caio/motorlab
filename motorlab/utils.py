@@ -1,3 +1,4 @@
+import os
 import random
 
 from pathlib import Path
@@ -13,12 +14,30 @@ from motorlab import poses, room, spikes, plot
 
 DEFAULT_DTYPE = np.float32
 
+# Device selection with distributed training support
+def get_device():
+    """Get the appropriate device for the current process."""
+    # Check if we're in distributed mode
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        # Use the local GPU assigned to this process
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        return torch.device(f"cuda:{local_rank}")
+    elif torch.cuda.is_available():
+        return torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        return torch.device("mps")
+    else:
+        return torch.device("cpu")
+
+DEVICE = get_device()
+
+# Performance optimizations
+torch.set_float32_matmul_precision("high")
+
+# Enable TF32 for cuDNN operations (CUDA only, no effect on MPS but harmless)
 if torch.cuda.is_available():
-    DEVICE = torch.device("cuda")
-elif torch.backends.mps.is_available():
-    DEVICE = torch.device("mps")
-else:
-    DEVICE = torch.device("cpu")
+    torch.backends.cudnn.allow_tf32 = True
+
 
 REPRESENTATIONS = [
     "allocentric",

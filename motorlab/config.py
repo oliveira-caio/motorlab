@@ -1,25 +1,20 @@
 """
-Comprehensive configuration system for motorlab experiments.
-
-This file contains ALL possible configuration options used across the codebase.
-Each option is documented with its purpose, possible values, and usage notes.
-
-IMPORTANT NOTES:
-- Some options are mutually exclusive or context-dependent
-- If training from scratch, don't provide 'uid'
-- For regression tasks, don't use 'n_classes'
-- For transfer learning, use load/save directory separation
-- String keys that can be dictionaries: 'loss_fn', 'metric', 'in_modalities', 'out_modalities'
+Motorlab configuration system.
 """
-
-import warnings
 
 from pathlib import Path
 
 import yaml
 
 
-def load_default(experiment: str, sessions: list[str]) -> dict:
+SAMPLING_RATE = 50
+
+
+def load_default(
+    experiment: str,
+    sessions: list[str],
+    task: str = "poses_to_location",
+) -> dict:
     """
     Get a default configuration dictionary for a given experiment and sessions.
 
@@ -29,6 +24,8 @@ def load_default(experiment: str, sessions: list[str]) -> dict:
         Name of the experiment ('gbyk', 'pg', etc.)
     sessions : list of str
         List of session names
+    task : str, optional
+        Name of the ML task, by default "poses_to_location"
 
     Returns
     -------
@@ -36,167 +33,69 @@ def load_default(experiment: str, sessions: list[str]) -> dict:
         Default configuration dictionary.
     """
     config = {
-        # =================================================================
-        # CORE DATA & EXPERIMENT CONFIGURATION
-        # =================================================================
-        # Path of the data. This should be relative to the project root.
-        "data_dir": "data",
-        # Options for experiment: 'gbyk' and 'pg'
+        "task": task,
         "experiment": experiment,
         "sessions": sessions,
         "seed": 0,
-        # The sampling rate I'll convert the data into.
-        "sampling_rate": 20,
-        # =================================================================
-        # INPUT/OUTPUT MODALITIES
-        # =================================================================
-        # Can be string (single modality) or list (multiple modalities)
-        # Options: "poses", "speed", "acceleration", "spike_count", "location"
-        # Examples:
-        #   Single: "poses" or "location"
-        #   Multiple: ["poses", "spike_count"] for multi-modal input/output
-        "in_modalities": "poses",
-        "out_modalities": "location",
-        # =================================================================
-        # LOSS FUNCTION & METRICS
-        # =================================================================
-        # Can be string (single task) or dict (multi-task)
-        # Options for single task: "mse", "crossentropy", "poisson"
-        # Multi-task example: "loss_fn": {"spike_count": "poisson", "location": "mse"},
-        "loss_fn": "mse",
-        # Can be string (single metric) or dict (per-modality metrics)
-        # Options: "mse", "accuracy", "correlation"
-        # Multi-modal example: "metric": {"location": "correlation", "spikes": "mse"},
-        "metric": "mse",
-        # =================================================================
-        # MODEL ARCHITECTURE
-        # =================================================================
+        "paths": {
+            "artifacts_dir": "artifacts",
+            "data_dir": "data",
+        },
+        "data": {
+            "input_modalities": "poses",
+            "output_modalities": "location",
+            "dataset": {
+                "stride": 1000,  # milliseconds
+                "concat_input": True,
+                "concat_output": True,
+            },
+            "dataloader": {
+                "variable_length": True,
+                "min_length": 100,  # milliseconds
+                "max_length": 4000,  # milliseconds
+                "batch_size": 64,
+            },
+        },
         "model": {
-            # Options for architecture: "fc", "gru", "lstm", "linreg"
             "architecture": "fc",
             "embedding_dim": 256,
             "hidden_dim": 256,
             "n_layers": 3,
-            # READOUT CONFIGURATION (can be string or dict)
-            # Options: "linear", "softplus"
-            # Multi-modal example:
-            #   "readout_map": {"spike_count": "softplus", "location": "linear"},
             "readout": "linear",
-            # OPTIONAL MODEL PARAMETERS
-            # For classification (exclude for regression)
-            # "n_classes": 15,
-            # "dropout": 0.1,
-            # For RNN architectures such as (gru, lstm)
-            # "bidirectional": True,
         },
-        # =================================================================
-        # TRAINING CONFIGURATION
-        # =================================================================
         "training": {
-            # Maximum number of training epochs
-            "n_epochs": 500,
+            "max_epochs": 500,
+            "loss_function": "mse",
+            "metric": "mse",
             "optimizer": {"type": "adam", "lr": 1e-2, "weight_decay": 1e-4},
-            # "optimizer": {"type": "sgd", "lr": 1e-2, "weight_decay": 1e-4, "momentum": 0.9},
             "scheduler": {"type": "step_lr", "step_size": 100, "gamma": 0.8},
-            # "scheduler": {"type": "cosine_annealing", "eta_min": 1e-4},
-            # "scheduler": {
-            #     "type": "reduce_on_plateau",
-            #     "factor": 0.9,
-            #     "patience": 10,
-            #     "min_lr": 1e-5,
-            # },
+            "validation": {"frequency": 25, "gradient_threshold": 0.5},
             "early_stopping": {
                 "enabled": False,
                 "patience": 6,
                 "min_delta": 0.0,
                 "gradient_threshold": 0.5,
             },
-            "validation": {"frequency": 25, "gradient_threshold": 0.5},
         },
-        # =================================================================
-        # DATASET CONFIGURATION
-        # =================================================================
-        "dataset": {
-            # Sequence length in timesteps (5 seconds @ 20Hz)
-            "seq_length": 5 * 20,
-            # Stride between sequences (2 seconds @ 20Hz)
-            "stride": 2 * 20,
-            "batch_size": 64,
-            "entire_trials": False,
-            # If multi-modality training, concatenate or not the modalities into a single tensor
-            "concat_input": True,
-            "concat_output": True,
-        },
-        # =================================================================
-        # DATA INTERVALS & SPLITTING
-        # =================================================================
-        "intervals": {
-            # Excluding trials can be useful for testing only during homing.
-            "include_trial": True,
-            "include_homing": True,
-            # Excluding the sitting can be useful to focus only when the monkey is walking.
-            "include_sitting": True,
-            # Balance intervals removes the imbalance between sitting and walking, since there are usually way more frames of sitting.
-            "balance_intervals": False,
-        },
-        # =================================================================
-        # MODALITY-SPECIFIC CONFIGURATIONS
-        # =================================================================
-        "location": {
-            # Options for representation: "com" (for regression) and "tile" (for classification)
-            "representation": "com",
-        },
-        "poses": {
-            # Options for representation: "egocentric", "allocentric", "centered", "trunk"
-            "representation": "egocentric",
-            # "keypoints_to_exclude": ["head"],
-            # "project_to_pca": False,
-            # "divide_variance": False,
-            # PCA components to exclude per session
-            # "pcs_to_exclude": {"bex_20230621_spikes_sorted_SES": [0, 1, 2], "bex_20230624_spikes_sorted_SES": [1, 2]},"},
-        },
-        "kinematics": {
-            # Options for representation: "com_vec", "kps_vec", "kps_mag", "com_mag"
-            "representation": "com_vec",
-        },
-        "spikes": {
-            # Options for brain area: "all", "m1", "pmd", "dlpfc"
-            "brain_area": "all",
-        },
-        # =================================================================
-        # CHECKPOINT & CONFIG MANAGEMENT
-        # =================================================================
-        # Whether to save model and config
-        "save": True,
-        # Directory for saving checkpoints
-        "checkpoint_dir": "artifacts/checkpoint/poses_to_location",
-        # Directory for saving configs
-        "config_dir": "artifacts/config/poses_to_location",
-        # LOADING CONFIGURATIONS (for transfer learning or evaluation)
-        # Unique identifier for loading specific model
-        # "uid": "timestamp",
-        # Load checkpoint from specific epoch
-        # "load_epoch": 25,
-        # "freeze": True,
-        # SEPARATE LOAD/SAVE DIRECTORIES (for transfer learning)
-        # Load config from different task
-        # "config_load_dir": "config/source_task",
-        # Save config to different location
-        # "config_save_dir": "config/target_task",
-        # Load model from different task
-        # "checkpoint_load_dir": "checkpoint/source_task",
-        # Save model to different location
-        # "checkpoint_save_dir": "checkpoint/target_task",
-        # =================================================================
-        # TRACKING & LOGGING
-        # =================================================================
-        "track": {
-            # Print metrics during training
+        "tracking": {
             "stdout": True,
-            # Log to Weights & Biases
             "wandb": False,
-            # Save checkpoints during training
             "checkpoint": True,
+            "logging": True,
+        },
+        "modalities": {
+            "location": {
+                "representation": "com",
+            },
+            "poses": {
+                "representation": "egocentric",
+            },
+            "intervals": {
+                "include_trial": True,
+                "include_homing": True,
+                "include_sitting": True,
+                "balance_intervals": False,
+            },
         },
     }
     return config
@@ -212,9 +111,9 @@ def save(config: dict) -> None:
         Configuration dictionary.
     """
     config_dir = Path(
-        config["config_save_dir"]
+        config["paths"]["config_save_dir"]
         if "config_save_dir" in config
-        else config["config_dir"]
+        else config["paths"]["config_dir"]
     )
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / f"{config['uid']}.yml"
@@ -230,6 +129,8 @@ def preprocess(config: dict) -> dict:
     - Converts string modalities to lists
     - Creates readout_map from readout if not provided
     - Converts string metrics to per-modality dictionaries
+    - Auto-generates paths from task name
+    - Adds backward compatibility keys for existing codebase
     - Adds any other implicit keys or transformations
 
     Parameters
@@ -244,49 +145,82 @@ def preprocess(config: dict) -> dict:
     """
     processed_config = config.copy()
 
-    if isinstance(processed_config["in_modalities"], str):
-        processed_config["in_modalities"] = [processed_config["in_modalities"]]
-
-    if isinstance(processed_config["out_modalities"], str):
-        processed_config["out_modalities"] = [
-            processed_config["out_modalities"]
+    if isinstance(processed_config["data"]["input_modalities"], str):
+        processed_config["data"]["input_modalities"] = [
+            processed_config["data"]["input_modalities"]
         ]
 
-    if "readout_map" not in processed_config["model"]:
-        readout = processed_config["model"]["readout"]
-        if isinstance(readout, dict):
-            processed_config["model"]["readout_map"] = readout
-        else:
-            processed_config["model"]["readout_map"] = {
-                modality: readout
-                for modality in processed_config["out_modalities"]
-            }
+    if isinstance(processed_config["data"]["output_modalities"], str):
+        processed_config["data"]["output_modalities"] = [
+            processed_config["data"]["output_modalities"]
+        ]
 
-    if "metric" not in processed_config:
-        processed_config["metric"] = None
-
-    if isinstance(processed_config.get("metric"), str):
-        metric_value = processed_config["metric"]
-        processed_config["metric"] = {
-            modality: metric_value
-            for modality in processed_config["out_modalities"]
-        }
-
-    if isinstance(processed_config.get("loss_fn"), str):
-        loss_fn_value = processed_config["loss_fn"]
-        processed_config["loss_fn"] = {
-            modality: loss_fn_value
-            for modality in processed_config["out_modalities"]
-        }
-
-    if "log_dir" not in processed_config:
-        warnings.warn(
-            "log_dir not provided in config. No logging will be performed.",
-            UserWarning,
-            stacklevel=2,
-        )
-        processed_config["track"]["logging"] = False
+    readout = processed_config["model"]["readout"]
+    if isinstance(readout, dict):
+        processed_config["model"]["readout_map"] = readout
     else:
-        processed_config["track"]["logging"] = True
+        processed_config["model"]["readout_map"] = {
+            modality: readout
+            for modality in processed_config["data"]["output_modalities"]
+        }
+
+    if "metric" not in processed_config["training"]:
+        processed_config["training"]["metric"] = None
+
+    if isinstance(processed_config["training"].get("metric"), str):
+        metric_value = processed_config["training"]["metric"]
+        processed_config["training"]["metric"] = {
+            modality: metric_value
+            for modality in processed_config["data"]["output_modalities"]
+        }
+
+    if isinstance(processed_config["training"].get("loss_function"), str):
+        loss_fn_value = processed_config["training"]["loss_function"]
+        processed_config["training"]["loss_function"] = {
+            modality: loss_fn_value
+            for modality in processed_config["data"]["output_modalities"]
+        }
+
+    for path_type in ["checkpoint", "config", "logs"]:
+        key = f"{path_type}_dir"
+        if key not in processed_config:
+            base_dir = processed_config["paths"]["artifacts_dir"]
+            task = processed_config["task"]
+            processed_config["paths"][key] = f"{base_dir}/{path_type}/{task}"
+
+    if "stride" in config["data"]["dataset"]:
+        processed_config["data"]["dataset"]["stride"] = (
+            config["data"]["dataset"]["stride"] // SAMPLING_RATE
+        )
+
+    dataloader_config = processed_config["data"]["dataloader"]
+    variable_length = dataloader_config.get("variable_length", False)
+
+    if variable_length:
+        if (
+            "min_length" not in dataloader_config
+            or "max_length" not in dataloader_config
+        ):
+            raise ValueError(
+                "Variable length requires 'min_length' and 'max_length'"
+            )
+
+        processed_config["data"]["dataloader"]["min_length"] = (
+            dataloader_config["min_length"] // SAMPLING_RATE
+        )
+        processed_config["data"]["dataloader"]["max_length"] = (
+            dataloader_config["max_length"] // SAMPLING_RATE
+        )
+    else:
+        if "length" in dataloader_config:
+            length = dataloader_config["length"]
+        elif "max_length" in dataloader_config:
+            length = dataloader_config["max_length"]
+        else:
+            raise ValueError("Fixed length requires 'length' or 'max_length'")
+
+        processed_config["data"]["dataloader"]["max_length"] = (
+            length // SAMPLING_RATE
+        )
 
     return processed_config

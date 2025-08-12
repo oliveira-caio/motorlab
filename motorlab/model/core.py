@@ -90,6 +90,7 @@ def create_optimizer(model, optimizer_config: dict) -> torch.optim.Optimizer:
             params=model.parameters(),
             lr=optimizer_config.get("lr", 1e-2),
             weight_decay=optimizer_config.get("weight_decay", 0),
+            fused=True,
         )
     elif optimizer_type == "sgd":
         return torch.optim.SGD(
@@ -183,7 +184,13 @@ def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
     Parameters
     ----------
     config : dict
-        Configuration dictionary containing model and data parameters
+        Configuration dictionary with new modular structure containing:
+        - paths: Directory paths (data_dir, artifacts_dir)
+        - data: Data configuration (input_modalities, output_modalities, dataset, dataloader)
+        - model: Model architecture and parameters
+        - modalities: Modality-specific configurations
+        - training: Training parameters (optimizer, scheduler, loss_function, early_stopping)
+        - tracking: Logging and tracking configuration
     train_intervals : dict
         Training intervals for each session
     is_train : bool
@@ -197,15 +204,14 @@ def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
     utils.fix_seed(config.get("seed", 0))
 
     data_dict = utils.load_all_data(
-        data_dir=config["data_dir"],
+        data_dir=config["paths"]["data_dir"],
         sessions=config["sessions"],
-        in_modalities=config["in_modalities"],
-        out_modalities=config["out_modalities"],
-        experiment=config.get("experiment", "gbyk"),
-        poses_config=config.get("poses", dict()),
-        location_config=config.get("position", dict()),
-        kinematics_config=config.get("kinematics", dict()),
-        spikes_config=config.get("spikes", dict()),
+        in_modalities=config["data"]["input_modalities"],
+        out_modalities=config["data"]["output_modalities"],
+        experiment=config["experiment"],
+        location_config=config["modalities"].get("location", dict()),
+        kinematics_config=config["modalities"].get("kinematics", dict()),
+        spikes_config=config["modalities"].get("spikes", dict()),
         train_intervals=train_intervals,
     )
 
@@ -214,11 +220,11 @@ def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
     if is_train:
         in_dim, out_dim = compute_dimensions(
             data_dict=data_dict,
-            in_modalities=config["in_modalities"],
-            out_modalities=config["out_modalities"],
+            in_modalities=config["data"]["input_modalities"],
+            out_modalities=config["data"]["output_modalities"],
             sessions=config["sessions"],
-            concat_input=config["dataset"].get("concat_input", True),
-            concat_output=config["dataset"].get("concat_output", True),
+            concat_input=config["data"]["dataset"].get("concat_input", True),
+            concat_output=config["data"]["dataset"].get("concat_output", True),
             n_classes=config["model"].get("n_classes", None),
         )
 
@@ -231,11 +237,15 @@ def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
         if not model_dict.get("in_dim") or not model_dict.get("out_dim"):
             in_dim, out_dim = compute_dimensions(
                 data_dict=data_dict,
-                in_modalities=config["in_modalities"],
-                out_modalities=config["out_modalities"],
+                in_modalities=config["data"]["input_modalities"],
+                out_modalities=config["data"]["output_modalities"],
                 sessions=config["sessions"],
-                concat_input=config["dataset"].get("concat_input", True),
-                concat_output=config["dataset"].get("concat_output", True),
+                concat_input=config["data"]["dataset"].get(
+                    "concat_input", True
+                ),
+                concat_output=config["data"]["dataset"].get(
+                    "concat_output", True
+                ),
                 n_classes=config["model"].get("n_classes", None),
             )
             model_dict["in_dim"] = in_dim
@@ -243,8 +253,8 @@ def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
 
         checkpoint_data = load_checkpoint_metadata(
             uid=uid,
-            checkpoint_dir=config.get(
-                "checkpoint_load_dir", config["checkpoint_dir"]
+            checkpoint_dir=config["paths"].get(
+                "checkpoint_load_dir", config["paths"]["checkpoint_dir"]
             ),
             load_epoch=config.get("load_epoch", None),
         )
@@ -252,7 +262,6 @@ def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
         model = load_model(
             architecture=config["model"]["architecture"],
             sessions=config["sessions"],
-            readout_map=config["model"]["readout_map"],
             model_dict=model_dict,
             checkpoint_data=checkpoint_data,
             freeze=config.get("freeze_core", False),
@@ -268,7 +277,7 @@ def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
         checkpoint_data = None
 
     loss_fns = {
-        session: modules.DictLoss(config["loss_fn"])
+        session: modules.DictLoss(config["training"]["loss_function"])
         for session in config["sessions"]
     }
 
@@ -308,23 +317,23 @@ def setup(config: dict, train_intervals: dict, is_train: bool) -> dict:
                 config["old_uid"] = config["uid"]
             config["uid"] = str(uid)
 
-        if config["track"].get("logging", False):
+        if config["tracking"].get("logging", False):
             uid_msg = f"uid: {config.get('uid', 'None')}"
-            config_msg = f"{pprint.pformat(config, indent=2)}"
+            config_msg = f"\n{pprint.pformat(config, indent=2)}"
             model_msg = f"{str(model)}"
             n_params_msg = f"Number of parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}"
 
             run_logger = logger.create(
-                log_dir=config["log_dir"],
+                log_dir=config["paths"]["logs_dir"],
                 uid=uid,
-                console_output=config["track"].get("stdout", True),
+                console_output=config["tracking"].get("stdout", True),
             )
             run_logger.info(uid_msg)
             run_logger.info(config_msg)
             run_logger.info(model_msg)
             run_logger.info(n_params_msg)
 
-    if config["track"].get("wandb", False):
+    if config["tracking"].get("wandb", False):
         locked_keys = set(wandb.config.keys()) if wandb.run else set()
         config_for_wandb = {
             k: v for k, v in config.items() if k not in locked_keys
