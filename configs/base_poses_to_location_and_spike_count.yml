@@ -1,0 +1,50 @@
+task: poses_to_location_and_spike_count
+experiment: old_gbyk
+
+data:
+  dataset:
+    input_modalities: [poses] # ! FIX THIS
+    output_modalities: [spike_count, location] # ! FIX THIS
+    concat_output: False
+  modalities:
+    poses:
+        representation: adversarial
+
+model:
+  architecture: embedding_core_readout
+  embedding:
+    dim: 256
+  core:
+    architecture: gru
+    in_dim: 256
+    hidden_dim: 256
+    n_layers: 1
+    dropout: 0.1
+  readout:
+    map:
+      spike_count: softplus
+      location: identity
+
+trainer:
+  max_epochs: 100
+  metrics:
+    spike_count: correlation
+  loss_fns:
+    names:
+      spike_count: poisson
+      location: closed_mse
+    weights:
+      spike_count: 1.0
+      location: -0.01
+  optimizer:
+    algorithm: adam
+    lr: 0.003
+    weight_decay: 0.00001
+  scheduler:
+    method: cosine_annealing
+    T_max: 100
+    eta_min: 0.0001
+  early_stopper:
+    metric: val_local_corr
+    minimize: false
+    patience: 10

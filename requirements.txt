@@ -1,11 +1,5 @@
-ipykernel
-ipympl
-lipstick
-matplotlib
+h5py
 numpy
-plotly
+pandas
 pyyaml
-seaborn
 scikit-learn
-torch
-wandb

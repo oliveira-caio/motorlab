@@ -22,3 +22,6 @@ include = ["motorlab"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
+
+[project.scripts]
+motorlab = "motorlab.main:main"

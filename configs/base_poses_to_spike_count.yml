@@ -1,0 +1,42 @@
+task: poses_to_spike_count
+experiment: old_gbyk
+
+data:
+  dataset:
+    input_modalities: [poses] # ! FIX THIS
+    output_modalities: [spike_count] # ! FIX THIS
+
+model:
+  architecture: embedding_core_readout
+  embedding:
+    dim: 64
+  core:
+    architecture: gru
+    in_dim: 64
+    hidden_dim: 64
+    n_layers: 1
+    dropout: 0.05
+  readout:
+    map:
+      spike_count: softplus
+
+trainer:
+  max_epochs: 100
+  metrics:
+    spike_count: correlation
+  loss_fns:
+    name: adversarial_poisson
+    params:
+      lambda_adv: 0.0000000000000001
+  optimizer:
+    algorithm: adam
+    lr: 0.005
+    weight_decay: 0.0001
+  scheduler:
+    method: cosine_annealing
+    T_max: 100
+    eta_min: 0.0005
+  early_stopper:
+    metric: val_local_corr
+    minimize: false
+    patience: 6

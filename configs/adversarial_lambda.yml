@@ -1,0 +1,10 @@
+name: adversarial_lambda
+method: bayes
+metric:
+  name: val_local_corr
+  goal: maximize
+parameters:
+  trainer.loss_fns.weights.location:
+    max: 0
+    min: -0.1
+    distribution: uniform

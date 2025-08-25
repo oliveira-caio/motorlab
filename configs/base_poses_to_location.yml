@@ -1,0 +1,52 @@
+task: poses_to_location
+experiment: old_gbyk
+
+data:
+  dataset:
+    input_modalities: [poses] # ! FIX THIS
+    output_modalities: [location] # ! FIX THIS
+  modalities:
+    location:
+      representation: com
+    poses:
+        representation: adversarial
+        coordinates: egocentric
+        # project_to_pcs: draconian
+
+model:
+  architecture: embedding_core_readout
+  embedding:
+    dim: 256
+  core:
+    architecture: gru
+    in_dim: 256
+    hidden_dim: 256
+    n_layers: 1
+    dropout: 0.1
+    # architecture: fc
+    # dims: 128
+    # n_layers: 3
+  readout:
+    map: linear
+
+trainer:
+  max_epochs: 1000
+  metrics:
+    location: rmse
+  loss_fns:
+    names:
+      location: mse # ! FIX THIS
+  optimizer:
+    algorithm: adam
+    lr: 0.003
+    weight_decay: 0.00001
+  scheduler:
+    method: cosine_annealing
+    T_max: 100
+    eta_min: 0.0001
+    # method: step_lr
+    # step_size: 100
+    # gamma: 0.8
+
+uid: 20250822181930
+freeze_core: true

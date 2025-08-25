@@ -1,0 +1,68 @@
+artifacts_dir: artifacts/
+data:
+  dataloader:
+    batch_size: 64
+    max_length: 80
+    min_length: 80
+  dataset:
+    concat_input: true
+    concat_output: true
+    input_modalities:
+    - poses
+    output_dims:
+      bex_20230623_denoised:
+        location: 3
+      ken_20230614_denoised:
+        location: 3
+      ken_20230618_denoised:
+        location: 3
+    output_modalities:
+    - location
+    stride: 20
+  dir: data
+  intervals:
+    balance_intervals: false
+    include_homing: true
+    include_sitting: true
+    include_trial: true
+  modalities:
+    kinematics:
+      representation: com_vec
+    location:
+      representation: com
+    poses:
+      coordinates: egocentric
+      representation: egocentric
+      skeleton_type: normal
+    spike_count:
+      brain_areas: all
+    spikes:
+      brain_areas: all
+  sampling_rate: 20
+experiment: old_gbyk
+model:
+  architecture: lr
+run_dir: artifacts//poses_to_location/20250817012848
+save: true
+seed: 0
+sessions:
+- bex_20230623_denoised
+- ken_20230614_denoised
+- ken_20230618_denoised
+task: poses_to_location
+trainer:
+  early_stopper:
+    enabled: false
+  loss_fns:
+    location: mse
+  max_epochs: 1
+  metrics: {}
+  optimizer:
+    algorithm: adam
+    lr: 0.01
+  scheduler:
+    gamma: 1.0
+    method: step_lr
+    step_size: 1000
+  validation_frequency: 25
+uid: '20250817012848'

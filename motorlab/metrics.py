@@ -1,11 +1,66 @@
 import warnings
 
 import numpy as np
+import torch
 
 from sklearn.metrics import balanced_accuracy_score
 
 
-def compute(gts: dict, preds: dict, metrics: dict):
+class MultiModalLoss(torch.nn.Module):
+    def __init__(self, names: dict, weights: dict = dict()):
+        super().__init__()
+        registry = {
+            "closed_mse": ClosedFormMSE(),
+            "mse": torch.nn.MSELoss(),
+            "poisson": torch.nn.PoissonNLLLoss(log_input=False, full=True),
+        }
+        self.modalities = list(names.keys())
+        self.losses = torch.nn.ModuleDict(
+            {modality: registry[name] for modality, name in names.items()}
+        )
+        self.weights = weights or {k: 1.0 for k in names}
+
+    def forward(
+        self,
+        output: dict[str, torch.Tensor],
+        target: dict[str, torch.Tensor],
+    ):
+        total_loss = 0.0
+        for modality in output:
+            loss = self.losses[modality](output[modality], target[modality])
+            total_loss += self.weights[modality] * loss
+        return total_loss
+
+
+class ClosedFormMSE(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(
+        self,
+        output: torch.Tensor,
+        target: torch.Tensor,
+    ) -> torch.Tensor:
+        output = output.reshape(-1, output.shape[-1])
+        target = target.reshape(-1, target.shape[-1])
+        n, d = output.shape
+        ones = torch.ones(n, 1, device=output.device, dtype=output.dtype)
+        X_aug = torch.cat([output, ones], dim=1)  # (n, d+1)
+        XtX = X_aug.T @ X_aug
+        reg = 1e-6 * torch.eye(
+            XtX.shape[0], device=output.device, dtype=output.dtype
+        )
+        beta = torch.linalg.inv(XtX + reg) @ (X_aug.T @ target)  # (d+1, m)
+        Y_hat = X_aug @ beta
+        mse_loss = torch.mean((target - Y_hat) ** 2)
+        return mse_loss
+
+
+def compute(
+    gts: dict[str, dict[str, np.ndarray]],
+    preds: dict[str, dict[str, np.ndarray]],
+    metrics: dict | None,
+) -> dict[str, float]:
     """
     Compute metrics over all sessions for each modality.
 
@@ -24,7 +79,10 @@ def compute(gts: dict, preds: dict, metrics: dict):
         Computed metric values {metric_name: value} where correlation is
         split into 'global_corr' and 'local_corr'.
     """
-    results = {}
+    if metrics is None:
+        return dict()
+
+    results = dict()
 
     for modality, metric_name in metrics.items():
         gt_arrays = [gts[session][modality] for session in gts.keys()]
@@ -34,28 +92,30 @@ def compute(gts: dict, preds: dict, metrics: dict):
             results[metric_name] = np.mean(
                 [accuracy(gt, pred) for gt, pred in zip(gt_arrays, pred_arrays)]
             )
-        elif metric_name == "mse":
+        elif metric_name == "rmse":
             results[metric_name] = np.mean(
-                [mse(gt, pred) for gt, pred in zip(gt_arrays, pred_arrays)]
+                [rmse(gt, pred) for gt, pred in zip(gt_arrays, pred_arrays)]
             )
         elif metric_name == "correlation":
-            global_corrs = []
-            local_corrs = []
-            for gt, pred in zip(gt_arrays, pred_arrays):
-                global_corr = global_correlation(gt, pred)
-                local_corr = local_correlation(gt, pred)
-                global_corrs.append(global_corr)
-                local_corrs.append(local_corr)
-
-            results["global_corr"] = np.mean(global_corrs)
-            results["local_corr"] = np.mean(local_corrs)
+            results["global_corr"] = np.mean(
+                [
+                    np.mean(global_correlation(gt, pred))
+                    for gt, pred in zip(gt_arrays, pred_arrays)
+                ]
+            )
+            results["local_corr"] = np.mean(
+                [
+                    np.mean(local_correlation(gt, pred))
+                    for gt, pred in zip(gt_arrays, pred_arrays)
+                ]
+            )
         else:
-            raise ValueError(f"metric {metric_name} not implemented.")
+            warnings.warn(f"metric {metric_name} not implemented.")
 
     return results
 
 
-def mse(gt: np.ndarray, pred: np.ndarray) -> float:
+def rmse(gt: np.ndarray, pred: np.ndarray) -> float:
     """
     Compute mean squared error (MSE) between ground truth and predictions.
 
@@ -71,7 +131,7 @@ def mse(gt: np.ndarray, pred: np.ndarray) -> float:
     float
         Mean squared error.
     """
-    return np.mean((gt - pred) ** 2).item()
+    return np.sqrt(np.mean((gt - pred) ** 2).item())
 
 
 def balanced_accuracy(
@@ -140,13 +200,18 @@ def accuracy(gt: np.ndarray, pred: np.ndarray) -> float:
     float
         Balanced accuracy score.
     """
+    # shape of pred must be (..., n_classes)
     pred = pred.reshape(-1, pred.shape[-1])
     pred = pred.argmax(axis=-1)
     gt = gt.reshape(-1)
     return balanced_accuracy(gt, pred)
 
 
-def global_correlation(gt: np.ndarray, pred: np.ndarray, reduce: bool = True):
+def global_correlation(
+    gt: np.ndarray,
+    pred: np.ndarray,
+    reduce: bool = True,
+) -> float | np.ndarray:
     """
     Compute global correlation between ground truth and predictions.
 
@@ -164,19 +229,15 @@ def global_correlation(gt: np.ndarray, pred: np.ndarray, reduce: bool = True):
     float or np.ndarray
         Global correlation value(s).
     """
-    # gt, pred: (batch_size, seq_len, n_features)
-    pred = pred.reshape(-1, pred.shape[-1])
-    gt = gt.reshape(-1, gt.shape[-1])
+    # expected shape of gt and pred: (-1, n_features)
+    pred_centered = pred - np.mean(pred, axis=0)
+    gt_centered = gt - np.mean(gt, axis=0)
 
-    pred_centered = pred - np.nanmean(pred, axis=0)
-    gt_centered = gt - np.nanmean(gt, axis=0)
-
-    num = np.nansum(pred_centered * gt_centered, axis=0)
+    num = np.sum(pred_centered * gt_centered, axis=0)
     den = np.sqrt(
-        np.nansum(pred_centered**2, axis=0) * np.nansum(gt_centered**2, axis=0)
+        np.sum(pred_centered**2, axis=0) * np.sum(gt_centered**2, axis=0)
     )
-
-    global_corr = num / den
+    global_corr = np.where(den != 0, num / den, np.nan)
 
     if reduce:
         global_corr = np.nanmean(global_corr).item()
@@ -184,7 +245,13 @@ def global_correlation(gt: np.ndarray, pred: np.ndarray, reduce: bool = True):
     return global_corr
 
 
-def local_correlation(gt: np.ndarray, pred: np.ndarray, reduce: bool = True):
+def local_correlation(
+    gt: np.ndarray,
+    pred: np.ndarray,
+    reduce: bool = True,
+    sampling_rate: int = 20,
+    subinterval_len: int = 1000,
+) -> float | np.ndarray:
     """
     Compute local (per-frame) correlation between ground truth and predictions.
 
@@ -202,21 +269,17 @@ def local_correlation(gt: np.ndarray, pred: np.ndarray, reduce: bool = True):
     float or np.ndarray
         Local correlation value(s).
     """
-    # gt, pred: (batch_size, seq_len, n_features)
-    gt_centered = gt - np.nanmean(gt, axis=1, keepdims=True)
-    pred_centered = pred - np.nanmean(pred, axis=1, keepdims=True)
-
-    numerator = np.nansum(pred_centered * gt_centered, axis=1)
-    denom = np.sqrt(
-        np.nansum(pred_centered**2, axis=1) * np.nansum(gt_centered**2, axis=1)
-    )
-
-    corr = numerator / denom
-    corr = np.where(denom != 0, corr, np.nan)
-
-    local_corr = np.nanmean(corr, axis=0)  # (n_features,)
-
+    subinterval_len = int(subinterval_len * sampling_rate / 1000)
+    n_frames = gt.shape[0]
+    n_splits = int(np.ceil(n_frames / subinterval_len))
+    gt_splits = np.array_split(gt, n_splits, axis=0)
+    pred_splits = np.array_split(pred, n_splits, axis=0)
+    corrs = [
+        global_correlation(gt_sub, pred_sub, reduce=False)
+        for gt_sub, pred_sub in zip(gt_splits, pred_splits)
+    ]
+    corrs = np.array(corrs)  # shape: (n_splits, n_features)
     if reduce:
-        local_corr = np.nanmean(local_corr).item()
-
-    return local_corr
+        return np.nanmean(corrs).item()
+    else:
+        return np.nanmean(corrs, axis=0)
