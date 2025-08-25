@@ -47,10 +47,7 @@ class ClosedFormMSE(torch.nn.Module):
         ones = torch.ones(n, 1, device=output.device, dtype=output.dtype)
         X_aug = torch.cat([output, ones], dim=1)  # (n, d+1)
         XtX = X_aug.T @ X_aug
-        reg = 1e-6 * torch.eye(
-            XtX.shape[0], device=output.device, dtype=output.dtype
-        )
-        beta = torch.linalg.inv(XtX + reg) @ (X_aug.T @ target)  # (d+1, m)
+        beta = torch.linalg.inv(XtX) @ (X_aug.T @ target)  # (d+1, m)
         Y_hat = X_aug @ beta
         mse_loss = torch.mean((target - Y_hat) ** 2)
         return mse_loss

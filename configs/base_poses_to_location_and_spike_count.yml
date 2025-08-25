@@ -19,7 +19,7 @@ model:
     in_dim: 256
     hidden_dim: 256
     n_layers: 1
-    dropout: 0.1
+    # dropout: 0.1
   readout:
     map:
       spike_count: softplus
